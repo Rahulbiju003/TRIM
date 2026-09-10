@@ -129,6 +129,32 @@ class TestRunFromContent:
         result = reader.run_from_content("/x.py", content, mode="http")
         assert result.line_count == 3
 
+    def test_line_count_empty_content(self, isolated_metrics):
+        reader = BulkReaderMode(backend=_mock_backend())
+        result = reader.run_from_content("/x.py", "", mode="http")
+        assert result.line_count == 0
+
+    def test_line_count_single_line_with_newline(self, isolated_metrics):
+        reader = BulkReaderMode(backend=_mock_backend())
+        result = reader.run_from_content("/x.py", "hello\n", mode="http")
+        assert result.line_count == 1
+
+    def test_line_count_single_line_no_newline(self, isolated_metrics):
+        reader = BulkReaderMode(backend=_mock_backend())
+        result = reader.run_from_content("/x.py", "hello", mode="http")
+        assert result.line_count == 1
+
+    def test_line_count_only_newlines(self, isolated_metrics):
+        reader = BulkReaderMode(backend=_mock_backend())
+        result = reader.run_from_content("/x.py", "\n\n\n", mode="http")
+        assert result.line_count == 3
+
+    def test_line_count_crlf_line_endings(self, isolated_metrics):
+        """Windows-style \\r\\n counts as one line separator per line."""
+        reader = BulkReaderMode(backend=_mock_backend())
+        result = reader.run_from_content("/x.py", "a\r\nb\r\nc\r\n", mode="http")
+        assert result.line_count == 3
+
     def test_token_counts_from_backend(self, isolated_metrics):
         reader = BulkReaderMode(backend=_mock_backend(input_tokens=500, output_tokens=80))
         result = reader.run_from_content("/x.py", "line\n" * 400, mode="http")

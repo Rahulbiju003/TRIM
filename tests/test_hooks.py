@@ -266,6 +266,80 @@ class TestRoutingThresholds:
         assert result.stdout.strip() == ""
 
 
+# ── Routing boundary conditions ───────────────────────────────────────────────
+
+class TestRoutingBoundary:
+    """Boundary conditions for line count and byte count routing thresholds."""
+
+    def _run_with_venv(self, hook, stdin, extra_env=None):
+        python = TRIM_ROOT / ".venv" / "bin" / "python"
+        if not python.exists():
+            pytest.skip("No .venv found")
+        env = {
+            "PATH": str(python.parent) + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
+        }
+        if extra_env:
+            env.update(extra_env)
+        return _run_hook(hook, stdin, env=env)
+
+    def test_file_one_below_threshold_passes_through(self, tmp_path):
+        """9-line file with threshold 10 must pass through."""
+        f = tmp_path / "small.py"
+        f.write_text("\n".join(f"line{i}" for i in range(9)) + "\n")
+        result = self._run_with_venv(
+            READ_HOOK,
+            _hook_input(str(f)),
+            {"SHUNT_MIN_LINES": "10"},
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == ""
+
+    def test_file_at_threshold_is_routed(self, tmp_path, mock_worker_server):
+        """10-line file with threshold 10 must be routed."""
+        f = tmp_path / "boundary.py"
+        f.write_text("\n".join(f"line{i}" for i in range(10)) + "\n")
+        python = TRIM_ROOT / ".venv" / "bin" / "python"
+        if not python.exists():
+            pytest.skip("No .venv found")
+        with _temp_env_file(mock_worker_server):
+            result = self._run_with_venv(READ_HOOK, _hook_input(str(f)))
+        assert result.stdout.strip(), f"10-line file at threshold=10 must be routed; stderr: {result.stderr!r}"
+        data = json.loads(result.stdout)
+        assert data["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_file_without_trailing_newline_at_threshold_is_routed(self, tmp_path, mock_worker_server):
+        """10-line file without trailing newline at threshold 10 must still be routed.
+
+        wc -l would count 9 newlines (missing last line), but the hook adjusts +1.
+        """
+        f = tmp_path / "no_newline.py"
+        f.write_text("\n".join(f"line{i}" for i in range(10)))  # no trailing \n
+        python = TRIM_ROOT / ".venv" / "bin" / "python"
+        if not python.exists():
+            pytest.skip("No .venv found")
+        with _temp_env_file(mock_worker_server):
+            result = self._run_with_venv(READ_HOOK, _hook_input(str(f)))
+        assert result.stdout.strip(), (
+            "10-line file without trailing newline at threshold=10 must be routed; "
+            f"stderr: {result.stderr!r}"
+        )
+        data = json.loads(result.stdout)
+        assert data["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_file_too_large_in_bytes_passes_through(self, tmp_path):
+        """A file exceeding SHUNT_MAX_BYTES must pass through even if line count is high."""
+        f = tmp_path / "huge.py"
+        # Write >500 bytes, >10 lines
+        f.write_text("\n".join(f"{'x' * 60}" for _ in range(20)) + "\n")
+        result = self._run_with_venv(
+            READ_HOOK,
+            _hook_input(str(f)),
+            {"SHUNT_MIN_LINES": "10", "SHUNT_MAX_BYTES": "100"},
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == ""
+
+
 # ── Bash hook routing ─────────────────────────────────────────────────────────
 
 class TestBashHookRouting:
