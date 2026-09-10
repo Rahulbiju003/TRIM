@@ -24,6 +24,7 @@ import secrets
 import threading
 import time
 
+import litellm.exceptions
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -127,6 +128,12 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
             question=req.question,
             mode="http",
         )
+    except litellm.exceptions.RateLimitError as exc:
+        # Provider rate-limited us — 429 is semantically correct and easier to
+        # distinguish from real 500s in monitoring. Hook fails-open either way.
+        raise HTTPException(
+            status_code=429, detail="Provider rate limit exceeded — try again shortly"
+        ) from exc
     except Exception as exc:
         # Do not expose exc details — LiteLLM errors embed API keys in the message.
         raise HTTPException(status_code=500, detail="Worker error — see server logs") from exc

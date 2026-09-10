@@ -137,6 +137,28 @@ class TestBulkRead:
             resp = client.post("/bulk-read", json=self._payload())
         assert resp.status_code == 500
 
+    def test_provider_rate_limit_returns_429(self, client):
+        """Provider RateLimitError must surface as 429, not 500, for better monitoring."""
+        import litellm.exceptions
+        import worker.server as srv
+        with patch.object(srv, "_reader") as mock_reader:
+            mock_reader.run_from_content.side_effect = litellm.exceptions.RateLimitError(
+                message="Too many requests", llm_provider="openai", model="gpt-4.1-nano"
+            )
+            resp = client.post("/bulk-read", json=self._payload())
+        assert resp.status_code == 429
+
+    def test_provider_rate_limit_detail_is_safe(self, client):
+        """The 429 detail must not leak provider error internals."""
+        import litellm.exceptions
+        import worker.server as srv
+        with patch.object(srv, "_reader") as mock_reader:
+            mock_reader.run_from_content.side_effect = litellm.exceptions.RateLimitError(
+                message="secret_key_leak", llm_provider="openai", model="gpt-4.1-nano"
+            )
+            resp = client.post("/bulk-read", json=self._payload())
+        assert "secret_key_leak" not in resp.text
+
     def test_mode_is_http(self, client, mock_result):
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
