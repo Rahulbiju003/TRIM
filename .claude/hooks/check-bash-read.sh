@@ -83,12 +83,13 @@ print(json.dumps({'file_path': fp, 'content': content}))
     AUTH_HEADER=""
     [[ -n "$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
 
+    # SC2086: intentional word-split so -H and the value become two args for curl
     # shellcheck disable=SC2086
     RESPONSE="$(printf '%s\n' "$PAYLOAD" | curl -sf \
         -X POST "${WORKER_URL}/bulk-read" \
         -H 'Content-Type: application/json' \
         --data-binary @- \
-        ${AUTH_HEADER:+"$AUTH_HEADER"} \
+        ${AUTH_HEADER:+$AUTH_HEADER} \
         --max-time "${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
     SUMMARY="$("$PYTHON" -c "

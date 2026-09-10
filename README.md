@@ -159,13 +159,63 @@ WORKER_MODEL=ollama/llama3.1:8b
 
 ---
 
-## Setup options
+## Deployment modes
 
-| Mode | When to use | How |
-|------|------------|-----|
-| **Podman (local)** | Solo dev, default | `podman-compose up -d` then `./setup.sh --install` |
-| **Podman (remote)** | Shared team server | `WORKER_URL=https://your-server ./setup.sh --install` |
-| **Subprocess** | No container runtime | `./setup.sh --local --install` (uses local venv) |
+### Subprocess mode (default, zero infrastructure)
+
+No container runtime needed. The hook spawns a Python process directly from the TRIM venv.
+
+```bash
+# Install using the local venv
+./setup.sh --local --install /path/to/your/project
+```
+
+The hook calls `python -m worker bulk-read` in-process. Each file read spawns a short-lived Python process — fine for solo use, less efficient for a team sharing one machine.
+
+### Local container (Podman or Docker)
+
+The worker runs as a long-lived HTTP server so hook overhead is just a `curl` call.
+
+```bash
+# Start the container
+podman-compose up -d          # or: docker compose up -d
+
+# Verify it's up
+curl http://localhost:8080/health
+
+# Install hooks pointing at the local container
+./setup.sh --install /path/to/your/project
+```
+
+The `WORKER_URL` defaults to `http://localhost:8080`. The hooks are generated with this URL baked in.
+
+### Remote server (shared team deployment)
+
+Run the worker on a shared server. All team members point their hooks at it.
+
+**On the server** — build and run the image:
+
+```bash
+podman build -t trim-worker .
+podman run -d --name trim-worker \
+  -p 8080:8080 \
+  -e WORKER_MODEL=gpt-4.1-nano \
+  -e OPENAI_API_KEY=sk-... \
+  -e TRIM_API_KEY=your-strong-secret \
+  trim-worker
+```
+
+**On each developer machine** — install hooks pointing at the server:
+
+```bash
+WORKER_URL=https://trim.your-company.com \
+TRIM_API_KEY=your-strong-secret \
+  ./setup.sh --install /path/to/your/project
+```
+
+The `TRIM_API_KEY` is baked into the generated hook at install time. Callers send it as `X-TRIM-Key: <key>`. The server validates it with a constant-time comparison; requests without the correct key receive `401`.
+
+> **Note:** The `/health`, `/dashboard`, and `/api/metrics` endpoints are always open — only `/bulk-read` requires the key.
 
 ### Removing TRIM from a project
 
@@ -184,7 +234,7 @@ All configuration lives in `.env`. Copy `.env.example` to get started.
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / etc. | — | API key for your chosen provider |
 | `WORKER_MODEL` | `openrouter/meta-llama/llama-3.1-8b-instruct:free` | Any [LiteLLM model string](https://docs.litellm.ai/docs/providers) |
 | `SHUNT_MIN_LINES` | `350` | Files above this line count are delegated |
-| `SHUNT_TIMEOUT_SECONDS` | `90` | Worker timeout — fail-open if exceeded |
+| `SHUNT_TIMEOUT_SECONDS` | `45` | Worker timeout — fail-open if exceeded |
 | `SHUNT_MAX_BYTES` | `400000` | Max payload bytes (macOS: 400000, Linux: 120000) |
 | `WORKER_URL` | _(unset)_ | Unset = subprocess mode, set = HTTP mode |
 | `WORKER_PORT` | `8080` | HTTP server port |
@@ -211,10 +261,10 @@ All configuration lives in `.env`. Copy `.env.example` to get started.
 The worker serves a live metrics dashboard at `http://localhost:8080/dashboard`. It auto-refreshes every 30 seconds and shows:
 
 - Total delegations and tokens intercepted
-- Estimated cost saved vs Claude Sonnet pricing
+- Actual LLM cost (per-model breakdown with published API rates)
 - Average worker latency
 - Delegations by day (bar chart)
-- Recent delegation log
+- Recent delegation log with per-call cost
 
 ---
 
