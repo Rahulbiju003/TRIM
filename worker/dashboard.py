@@ -43,19 +43,15 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "ollama/llama3.1:8b":      (0.0, 0.0),
 }
 
-_FALLBACK_PRICE = (1.0, 4.0)  # conservative estimate for unknown models
-
-
-def _model_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Calculate actual LLM cost in USD for a given model and token counts."""
-    # Normalize: strip leading/trailing whitespace, lowercase for lookup
+def _model_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Return cost in USD, or None if the model's pricing is unknown."""
     key = model.strip().lower()
-    price_in, price_out = _MODEL_PRICING.get(key, _FALLBACK_PRICE)
+    pricing = _MODEL_PRICING.get(key)
+    if pricing is None:
+        return None
+    price_in, price_out = pricing
     return (input_tokens / 1_000_000 * price_in) + (output_tokens / 1_000_000 * price_out)
 
-
-def _is_known_model(model: str) -> bool:
-    return model.strip().lower() in _MODEL_PRICING
 
 
 _HTML = """\
@@ -466,7 +462,7 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     # Per-model aggregation
     model_data: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"count": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "known_price": True}
+        lambda: {"count": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": None, "known_price": True}
     )
     day_counts: dict[str, int] = defaultdict(int)
     total_cost = 0.0
@@ -477,26 +473,27 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         in_tok = r.get("input_tokens", 0)
         out_tok = r.get("output_tokens", 0)
         cost = _model_cost_usd(model, in_tok, out_tok)
-        known = _is_known_model(model)
 
         model_data[model]["count"] += 1
         model_data[model]["input_tokens"] += in_tok
         model_data[model]["output_tokens"] += out_tok
-        model_data[model]["cost_usd"] += cost
-        if not known:
+        if cost is not None:
+            current = model_data[model]["cost_usd"]
+            model_data[model]["cost_usd"] = (current if current is not None else 0.0) + cost
+            total_cost += cost
+        else:
             model_data[model]["known_price"] = False
             has_unknown = True
-
-        total_cost += cost
 
         ts = r.get("ts")
         if ts is not None:
             day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
             day_counts[day] += 1
 
-    # Round model costs
+    # Round model costs (only where pricing is known)
     for m in model_data.values():
-        m["cost_usd"] = round(m["cost_usd"], 6)
+        if m["cost_usd"] is not None:
+            m["cost_usd"] = round(m["cost_usd"], 6)
 
     recent_formatted = []
     for r in reversed(records[-20:]):
@@ -508,6 +505,7 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         in_tok = r.get("input_tokens", 0)
         out_tok = r.get("output_tokens", 0)
         model = r.get("model", "—")
+        rec_cost = _model_cost_usd(model, in_tok, out_tok)
         recent_formatted.append({
             "ts_human": dt_str,
             "file": r.get("file", "—"),
@@ -515,7 +513,7 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
             "latency_ms": round(r.get("latency_ms", 0), 1),
             "input_tokens": in_tok,
             "output_tokens": out_tok,
-            "cost_usd": round(_model_cost_usd(model, in_tok, out_tok), 6),
+            "cost_usd": round(rec_cost, 6) if rec_cost is not None else None,
             "model": model,
             "mode": r.get("mode", "—"),
         })

@@ -33,10 +33,9 @@ class TestModelCostUsd:
         cost = dashboard._model_cost_usd("openrouter/nex-agi/nex-n2.5-mini:free", 1_000_000, 1_000_000)
         assert cost == pytest.approx(0.0)
 
-    def test_unknown_model_uses_fallback(self):
-        # Unknown model: falls back to _FALLBACK_PRICE (1.0, 4.0)
+    def test_unknown_model_returns_none(self):
         cost = dashboard._model_cost_usd("unknown-model-xyz", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(1.0 + 4.0)
+        assert cost is None
 
     def test_case_insensitive_lookup(self):
         cost_lower = dashboard._model_cost_usd("gpt-4.1-nano", 1_000_000, 0)
@@ -52,19 +51,6 @@ class TestModelCostUsd:
         cost = dashboard._model_cost_usd("gpt-4.1-nano", 500_000, 0)
         assert cost == pytest.approx(0.05)
 
-
-class TestIsKnownModel:
-    def test_known_model(self):
-        assert dashboard._is_known_model("gpt-4.1-nano") is True
-
-    def test_unknown_model(self):
-        assert dashboard._is_known_model("fantasy-model-v99") is False
-
-    def test_free_tier_known(self):
-        assert dashboard._is_known_model("openrouter/nex-agi/nex-n2.5-mini:free") is True
-
-    def test_case_insensitive(self):
-        assert dashboard._is_known_model("GPT-4.1-NANO") is True
 
 
 class TestComputeStatsEmpty:
@@ -164,10 +150,43 @@ class TestComputeStats:
         for rec in stats["recent"]:
             assert required <= rec.keys()
 
-    def test_recent_cost_usd_non_negative(self, sample_records):
+    def test_recent_cost_usd_non_negative_for_known_models(self, sample_records):
         stats = dashboard.compute_stats(sample_records)
         for rec in stats["recent"]:
+            # sample_records only uses known models — cost must be a non-negative float
+            assert rec["cost_usd"] is not None
             assert rec["cost_usd"] >= 0
+
+    def test_unknown_model_cost_usd_is_none_in_recent(self):
+        records = [{
+            "ts": time.time(), "file": "/x.py", "lines": 400,
+            "latency_ms": 100.0, "input_tokens": 100, "output_tokens": 10,
+            "mode": "subprocess", "model": "fantasy-model-v99",
+        }]
+        stats = dashboard.compute_stats(records)
+        assert stats["recent"][0]["cost_usd"] is None
+
+    def test_unknown_model_excluded_from_total_cost(self):
+        records = [
+            {"ts": time.time(), "file": "/a.py", "lines": 400, "latency_ms": 100.0,
+             "input_tokens": 1_000_000, "output_tokens": 1_000_000,
+             "mode": "subprocess", "model": "gpt-4.1-nano"},
+            {"ts": time.time(), "file": "/b.py", "lines": 400, "latency_ms": 100.0,
+             "input_tokens": 1_000_000, "output_tokens": 1_000_000,
+             "mode": "subprocess", "model": "fantasy-model-v99"},
+        ]
+        stats = dashboard.compute_stats(records)
+        # Only gpt-4.1-nano cost ($0.10 + $0.40 = $0.50) is included; unknown is excluded
+        assert stats["total_llm_cost_usd"] == pytest.approx(0.50)
+
+    def test_unknown_model_breakdown_cost_usd_is_none(self):
+        records = [{
+            "ts": time.time(), "file": "/x.py", "lines": 400,
+            "latency_ms": 100.0, "input_tokens": 100, "output_tokens": 10,
+            "mode": "subprocess", "model": "fantasy-model-v99",
+        }]
+        stats = dashboard.compute_stats(records)
+        assert stats["model_breakdown"]["fantasy-model-v99"]["cost_usd"] is None
 
     def test_missing_ts_handled_gracefully(self):
         records = [{"file": "/x.py", "lines": 400, "latency_ms": 100.0,
