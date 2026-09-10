@@ -12,6 +12,9 @@ import sys
 
 
 def cmd_bulk_read(args: argparse.Namespace) -> None:
+    from worker import config
+    config.validate()
+
     from worker.modes.bulk_reader import BulkReaderMode
 
     reader = BulkReaderMode()
@@ -41,6 +44,9 @@ def cmd_bulk_read(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(_args: argparse.Namespace) -> None:
+    from worker import config
+    config.validate()
+
     from worker.server import serve
 
     serve()

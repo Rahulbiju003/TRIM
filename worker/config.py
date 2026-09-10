@@ -28,9 +28,8 @@ def _float(name: str, default: float) -> float:
 
 
 # ── Provider / model ──────────────────────────────────────────────────────────
-WORKER_MODEL: str = os.environ.get(
-    "WORKER_MODEL", "openrouter/nex-agi/nex-n2.5-mini:free"
-)
+# No default: validate() will catch a missing value at startup.
+WORKER_MODEL: str = os.environ.get("WORKER_MODEL", "")
 WORKER_TEMPERATURE: float = _float("WORKER_TEMPERATURE", 0.2)
 
 # ── Routing thresholds ────────────────────────────────────────────────────────
@@ -61,3 +60,25 @@ SHUNT_RATE_LIMIT_RPM: int = _int("SHUNT_RATE_LIMIT_RPM", 0)
 SHUNT_METRICS_FILE: str = os.environ.get(
     "SHUNT_METRICS_FILE", "/tmp/trim-metrics.jsonl"
 )
+
+
+# ── Startup validation ────────────────────────────────────────────────────────
+
+_REQUIRED: list[str] = ["WORKER_MODEL"]
+
+
+def validate() -> None:
+    """Check that all required env vars are set. Call once at process startup.
+
+    Prints a clear error to stderr and exits with code 1 if anything is missing,
+    rather than failing later with a cryptic LiteLLM error.
+    """
+    missing = [name for name in _REQUIRED if not os.environ.get(name, "")]
+    if missing:
+        for name in missing:
+            print(
+                f"[TRIM] ERROR: {name} is required but not set. "
+                f"Add it to your .env file (see .env.example).",
+                file=sys.stderr,
+            )
+        sys.exit(1)

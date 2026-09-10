@@ -135,3 +135,38 @@ class TestWorkerUrl:
     def test_multiple_trailing_slashes_stripped(self):
         url = "http://localhost:8080///"
         assert url.rstrip("/") == "http://localhost:8080"
+
+
+class TestValidate:
+    """config.validate() — startup guard for required env vars."""
+
+    def test_passes_when_worker_model_set(self, monkeypatch):
+        monkeypatch.setenv("WORKER_MODEL", "gpt-4.1-nano")
+        # Must not raise / exit
+        config.validate()
+
+    def test_exits_when_worker_model_missing(self, monkeypatch):
+        monkeypatch.delenv("WORKER_MODEL", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            config.validate()
+        assert exc_info.value.code == 1
+
+    def test_exits_when_worker_model_empty_string(self, monkeypatch):
+        monkeypatch.setenv("WORKER_MODEL", "")
+        with pytest.raises(SystemExit) as exc_info:
+            config.validate()
+        assert exc_info.value.code == 1
+
+    def test_error_message_names_the_var(self, monkeypatch, capsys):
+        monkeypatch.delenv("WORKER_MODEL", raising=False)
+        with pytest.raises(SystemExit):
+            config.validate()
+        captured = capsys.readouterr()
+        assert "WORKER_MODEL" in captured.err
+
+    def test_error_message_mentions_env_file(self, monkeypatch, capsys):
+        monkeypatch.delenv("WORKER_MODEL", raising=False)
+        with pytest.raises(SystemExit):
+            config.validate()
+        captured = capsys.readouterr()
+        assert ".env" in captured.err
