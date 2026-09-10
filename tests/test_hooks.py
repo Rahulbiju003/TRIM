@@ -393,3 +393,62 @@ class TestHookOutputPython:
         }
         # Claude Code ignores top-level additionalContext — verify it's missing
         assert "additionalContext" not in wrong_output["hookSpecificOutput"]
+
+
+# ── Bash hook command-parser unit tests ───────────────────────────────────────
+
+class TestBashHookCommandParsing:
+    """Unit-test the command-detection logic embedded in check-bash-read.sh.
+
+    The hook extracts a file path from the bash command string using a Python
+    snippet. These tests exercise that logic directly so we don't need a full
+    subprocess round-trip for every pattern.
+    """
+
+    def _parse(self, cmd: str) -> str | None:
+        """Replicate the hook's Python parser. Returns file path or None."""
+        import re
+        cmd = cmd.strip()
+        if "|" in cmd or ">" in cmd or "<" in cmd:
+            return None
+        m = re.match(r"^(cat|head|tail|less|more)\s+(?:-\S+\s+)*(\S+)$", cmd)
+        if not m:
+            return None
+        fp = m.group(2)
+        if "*" in fp or "?" in fp or "[" in fp:
+            return None
+        return fp
+
+    def test_normal_file_extracted(self):
+        assert self._parse("cat /src/app.py") == "/src/app.py"
+
+    def test_star_glob_rejected(self):
+        assert self._parse("cat /src/*.py") is None
+
+    def test_question_mark_glob_rejected(self):
+        assert self._parse("cat /src/file?.py") is None
+
+    def test_bracket_expression_rejected(self):
+        assert self._parse("cat /src/[abc]file.py") is None
+
+    def test_bracket_range_rejected(self):
+        assert self._parse("cat /src/[0-9]test.py") is None
+
+    def test_bracket_in_middle_rejected(self):
+        assert self._parse("cat /src/file[0].py") is None
+
+    def test_pipe_rejected(self):
+        assert self._parse("cat /src/app.py | grep foo") is None
+
+    def test_redirect_rejected(self):
+        assert self._parse("cat /src/app.py > /tmp/out") is None
+
+    def test_head_with_flag_extracted(self):
+        assert self._parse("head -50 /src/app.py") == "/src/app.py"
+
+    def test_unsupported_command_rejected(self):
+        assert self._parse("vim /src/app.py") is None
+
+    def test_multiple_files_rejected(self):
+        # Two file args don't match the single-file pattern
+        assert self._parse("cat /src/a.py /src/b.py") is None

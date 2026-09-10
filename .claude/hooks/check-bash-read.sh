@@ -47,8 +47,8 @@ if not m:
     sys.exit(1)
 
 file_path = m.group(2)
-# Reject globs — pass through
-if '*' in file_path or '?' in file_path:
+# Reject glob patterns — pass through for shell expansion
+if '*' in file_path or '?' in file_path or '[' in file_path:
     sys.exit(1)
 
 print(file_path)

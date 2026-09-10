@@ -186,7 +186,7 @@ if '|' in cmd or '>' in cmd or '<' in cmd: sys.exit(1)
 m = re.match(r'^(cat|head|tail|less|more)\s+(?:-\S+\s+)*(\S+)$', cmd.strip())
 if not m: sys.exit(1)
 fp = m.group(2)
-if '*' in fp or '?' in fp: sys.exit(1)
+if '*' in fp or '?' in fp or '[' in fp: sys.exit(1)
 print(fp)
 PYEOF
 )" || exit 0
