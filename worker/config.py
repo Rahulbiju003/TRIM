@@ -29,7 +29,7 @@ def _float(name: str, default: float) -> float:
 
 # ── Provider / model ──────────────────────────────────────────────────────────
 WORKER_MODEL: str = os.environ.get(
-    "WORKER_MODEL", "openrouter/google/gemma-3n-e4b-it:free"
+    "WORKER_MODEL", "openrouter/nex-agi/nex-n2.5-mini:free"
 )
 WORKER_TEMPERATURE: float = _float("WORKER_TEMPERATURE", 0.2)
 

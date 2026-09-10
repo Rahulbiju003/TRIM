@@ -2,11 +2,14 @@
 
 Endpoints:
   GET  /health        → {"status": "ok", "model": "..."}
+  GET  /dashboard     → HTML metrics dashboard
+  GET  /api/metrics   → raw JSONL records as JSON
   POST /bulk-read     → {"summary": "...", "line_count": N, ...}
 
 Auth (optional):
   Set TRIM_API_KEY env var on the server. Callers must then send:
     X-TRIM-Key: <key>
+  Applies to /bulk-read only. /health, /dashboard and /api/metrics are open.
   Leave TRIM_API_KEY unset to disable auth (local/trusted use).
 """
 from __future__ import annotations
@@ -15,9 +18,10 @@ import secrets
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from worker import config
+from worker import config, dashboard
 from worker.backends.litellm_backend import LiteLLMBackend
 from worker.modes.bulk_reader import BulkReaderMode
 
@@ -34,7 +38,7 @@ _MAX_CONTENT_BYTES = config.SHUNT_MAX_BYTES + 4096
 def _check_auth(request: Request) -> None:
     """Verify X-TRIM-Key header when TRIM_API_KEY is configured."""
     if not config.TRIM_API_KEY:
-        return  # auth disabled
+        return
     provided = request.headers.get("X-TRIM-Key", "")
     if not secrets.compare_digest(provided, config.TRIM_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-TRIM-Key")
@@ -59,6 +63,19 @@ class BulkReadResponse(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model": config.WORKER_MODEL}
+
+
+@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+def dashboard_view() -> HTMLResponse:
+    records = dashboard.read_metrics()
+    stats = dashboard.compute_stats(records)
+    return HTMLResponse(content=dashboard.render_html(stats))
+
+
+@app.get("/api/metrics", include_in_schema=False)
+def api_metrics() -> JSONResponse:
+    records = dashboard.read_metrics()
+    return JSONResponse({"records": records, "count": len(records)})
 
 
 @app.post("/bulk-read", response_model=BulkReadResponse)

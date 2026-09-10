@@ -70,6 +70,15 @@ fi
 
 # ── Install hooks into target project ─────────────────────────────────────────
 TARGET="$(cd "$INSTALL_DIR" && pwd)"
+TRIM_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ "$TARGET" == "$TRIM_DIR" ]]; then
+    echo "ERROR: Cannot install TRIM into itself."
+    echo "The TRIM project already has its own dev hooks (check-file-size.sh / check-bash-read.sh)."
+    echo "Run setup.sh --install on a DIFFERENT project directory."
+    exit 1
+fi
+
 HOOKS_DIR="$TARGET/.claude/hooks"
 SETTINGS="$TARGET/.claude/settings.json"
 
@@ -105,8 +114,8 @@ LIMIT="\$(echo "\$HOOK_JSON"    | python3 -c "import json,sys; d=json.load(sys.s
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
-(( LINE_COUNT < MIN_LINES )) && exit 0
-(( BYTE_COUNT > MAX_BYTES )) && exit 0
+if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
+if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
 
 # Python reads the file directly — safe path handling, no shell quoting issues
 PAYLOAD="\$(python3 -c "
@@ -121,14 +130,14 @@ AUTH_HEADER=""
 [[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
 
 # shellcheck disable=SC2086
-RESPONSE="\$(echo "\$PAYLOAD" | curl -sf \
+RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
     -X POST "\${TRIM_WORKER}/bulk-read" \
     -H 'Content-Type: application/json' \
     --data-binary @- \
     \${AUTH_HEADER:+"\$AUTH_HEADER"} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
-SUMMARY="\$(echo "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
+SUMMARY="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
 [[ -z "\$SUMMARY" ]] && exit 0
 
 python3 -c "
@@ -140,8 +149,12 @@ context = (
     f'(Full file was NOT loaded — use this summary to answer the question.)'
 )
 print(json.dumps({
-    'hookSpecificOutput': {'permissionDecision': 'deny'},
-    'additionalContext': context,
+    'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse',
+        'permissionDecision': 'deny',
+        'permissionDecisionReason': 'File routed to cheap LLM by TRIM',
+        'additionalContext': context,
+    },
 }))
 " "\$SUMMARY" "\$FILE_PATH" "\$LINE_COUNT"
 HOOK
@@ -178,8 +191,8 @@ PYEOF
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
-(( LINE_COUNT < MIN_LINES )) && exit 0
-(( BYTE_COUNT > MAX_BYTES )) && exit 0
+if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
+if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
 
 PAYLOAD="\$(python3 -c "
 import json, sys
@@ -193,14 +206,14 @@ AUTH_HEADER=""
 [[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
 
 # shellcheck disable=SC2086
-RESPONSE="\$(echo "\$PAYLOAD" | curl -sf \
+RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
     -X POST "\${TRIM_WORKER}/bulk-read" \
     -H 'Content-Type: application/json' \
     --data-binary @- \
     \${AUTH_HEADER:+"\$AUTH_HEADER"} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
-SUMMARY="\$(echo "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
+SUMMARY="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
 [[ -z "\$SUMMARY" ]] && exit 0
 
 python3 -c "
@@ -212,8 +225,12 @@ context = (
     f'(Full file was NOT loaded — use this summary to answer the question.)'
 )
 print(json.dumps({
-    'hookSpecificOutput': {'permissionDecision': 'deny'},
-    'additionalContext': context,
+    'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse',
+        'permissionDecision': 'deny',
+        'permissionDecisionReason': 'File routed to cheap LLM by TRIM',
+        'additionalContext': context,
+    },
 }))
 " "\$SUMMARY" "\$FILE_PATH" "\$LINE_COUNT"
 HOOK

@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the worker package
 COPY worker/ ./worker/
 
+# Ensure the non-root user can write metrics to the mounted /tmp volume
+RUN chown trim:trim /tmp
+
 USER trim
 
 # Health check — port hardcoded to 8080 (shell variable expansion is build-time only).

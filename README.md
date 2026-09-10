@@ -2,7 +2,7 @@
 
 ## Token Routing Intelligence Middleware
 
-**TRIM** is a harness for Claude Code that intercepts expensive file reads and routes them to a cheaper LLM, returning a compact summary instead of loading the full file into context. It sits between Claude and your codebase as a transparent proxy Claude never knows the difference, but your token bill does.
+**TRIM** is a harness for Claude Code that intercepts expensive file reads and routes them to a cheaper LLM, returning a compact summary instead of loading the full file into context. It sits between Claude and your codebase as a transparent proxy — Claude never knows the difference, but your token bill does.
 
 ---
 
@@ -17,11 +17,11 @@ PreToolUse Hook (TRIM)
     │
     ├─ file < 350 lines? → pass through, Claude reads normally
     │
-    └─ file ≥ 350 lines? → send to cheap LLM (Podman worker)
+    └─ file ≥ 350 lines? → send to cheap LLM (worker)
                                │
                                ▼
                          Worker (LiteLLM)
-                         openrouter/gemma-3n  ← free tier
+                         any model you configure
                                │
                                ▼
                          Summary injected as additionalContext
@@ -32,9 +32,27 @@ PreToolUse Hook (TRIM)
 
 TRIM also intercepts `cat`, `head`, `tail` calls on large files via the Bash hook.
 
+TRIM always **fail-opens**: if the worker is unavailable, times out, or errors, Claude reads the file normally. Nothing breaks.
+
 ---
 
-## Quick Start (Podman — recommended)
+## Prerequisites
+
+Before starting, you need:
+
+| Requirement | What it is | Install |
+|-------------|-----------|---------|
+| **Claude Code** | The CLI this hooks into | [docs.anthropic.com/claude-code](https://docs.anthropic.com/en/docs/claude-code/getting-started) |
+| **Podman** | Container runtime (or Docker) | [podman.io/docs/installation](https://podman.io/docs/installation) |
+| **podman-compose** | Compose wrapper for Podman | `pip install podman-compose` |
+| **Python 3.10+** | Required for subprocess mode and hooks | [python.org/downloads](https://www.python.org/downloads/) |
+| **An LLM API key** | For the worker model | See [Model selection](#model-selection) below |
+
+> **macOS only:** After installing Podman, run `podman machine init && podman machine start` once to start the Linux VM that containers run in.
+
+---
+
+## Quick Start
 
 ### 1. Clone and configure
 
@@ -44,13 +62,19 @@ cd TRIM
 cp .env.example .env
 ```
 
-Edit `.env` and add your key:
+Edit `.env` and set your API key and model. The simplest option is OpenAI:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...   # free tier at openrouter.ai
+OPENAI_API_KEY=sk-...
+WORKER_MODEL=gpt-4.1-nano    # fast, cheap — ideal for summaries
 ```
 
-Everything else works with the defaults.
+Or use OpenRouter (free tier available at openrouter.ai):
+
+```bash
+OPENROUTER_API_KEY=sk-or-...
+WORKER_MODEL=openrouter/meta-llama/llama-3.1-8b-instruct:free
+```
 
 ### 2. Start the worker container
 
@@ -62,7 +86,7 @@ Verify it is running:
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok","model":"openrouter/google/gemma-3n-e4b-it:free"}
+# {"status":"ok","model":"gpt-4.1-nano"}
 ```
 
 ### 3. Wire TRIM into a Claude Code project
@@ -73,13 +97,65 @@ Run this from the TRIM directory, pointing at your project:
 ./setup.sh --install /path/to/your/project
 ```
 
-This generates two hook scripts in your project's `.claude/hooks/` and patches
-`.claude/settings.json`. The hooks use only `curl` — no Python needed on your host.
+This generates two hook scripts in your project's `.claude/hooks/` and patches `.claude/settings.json`. The hooks use only `curl` and `python3` — no TRIM venv needed on your host.
 
 ### 4. Open Claude Code in your project
 
-TRIM is now active. Large file reads are routed automatically. Check
-`/tmp/trim-metrics.jsonl` for a record of every delegation.
+TRIM is now active. Large file reads are routed automatically. Check `/tmp/trim-metrics.jsonl` for a record of every delegation.
+
+---
+
+## Model selection
+
+TRIM uses [LiteLLM](https://docs.litellm.ai/docs/providers) internally, which means **any model from any provider works** — you just change one line in `.env`.
+
+### OpenAI
+
+```bash
+OPENAI_API_KEY=sk-...
+WORKER_MODEL=gpt-4.1-nano          # cheapest, fastest
+WORKER_MODEL=gpt-4o-mini           # slightly stronger
+WORKER_MODEL=gpt-4.1-mini          # good balance
+```
+
+### Anthropic (Claude)
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+WORKER_MODEL=claude-haiku-4-5-20251001
+```
+
+### Google Gemini (direct)
+
+```bash
+GEMINI_API_KEY=...
+WORKER_MODEL=gemini/gemini-2.5-flash
+WORKER_MODEL=gemini/gemini-2.5-flash-lite
+```
+
+### OpenRouter (100+ models, one key)
+
+```bash
+OPENROUTER_API_KEY=sk-or-...
+
+# Free tier (verify availability at openrouter.ai/models):
+WORKER_MODEL=openrouter/meta-llama/llama-3.1-8b-instruct:free
+WORKER_MODEL=openrouter/mistralai/mistral-7b-instruct:free
+
+# Paid via OpenRouter:
+WORKER_MODEL=openrouter/google/gemini-2.5-flash
+WORKER_MODEL=openrouter/openai/gpt-4o-mini
+```
+
+### Local Ollama (zero cost, no internet)
+
+```bash
+# No API key needed — Ollama must be running locally
+WORKER_MODEL=ollama/qwen2.5-coder:7b
+WORKER_MODEL=ollama/llama3.1:8b
+```
+
+> The full list of supported providers and model strings is at [docs.litellm.ai/docs/providers](https://docs.litellm.ai/docs/providers).
 
 ---
 
@@ -90,27 +166,6 @@ TRIM is now active. Large file reads are routed automatically. Check
 | **Podman (local)** | Solo dev, default | `podman-compose up -d` then `./setup.sh --install` |
 | **Podman (remote)** | Shared team server | `WORKER_URL=https://your-server ./setup.sh --install` |
 | **Subprocess** | No container runtime | `./setup.sh --local --install` (uses local venv) |
-
-### Podman remote (team setup)
-
-Deploy the container on any server reachable by your team, then on each developer machine:
-
-```bash
-WORKER_URL=https://trim.yourteam.internal ./setup.sh --install ~/projects/my-app
-```
-
-All developers share one worker — one API key, centralised metrics.
-
-### Subprocess mode (no container)
-
-If you cannot run Podman, TRIM can invoke the worker as a local subprocess.
-Set up the venv once:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-./setup.sh --local --install /path/to/your/project
-```
 
 ### Removing TRIM from a project
 
@@ -126,38 +181,15 @@ All configuration lives in `.env`. Copy `.env.example` to get started.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | API key (openrouter.ai, free tier available) |
-| `WORKER_MODEL` | `openrouter/google/gemma-3n-e4b-it:free` | Any [LiteLLM model string](https://docs.litellm.ai/docs/providers) |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / etc. | — | API key for your chosen provider |
+| `WORKER_MODEL` | `openrouter/meta-llama/llama-3.1-8b-instruct:free` | Any [LiteLLM model string](https://docs.litellm.ai/docs/providers) |
 | `SHUNT_MIN_LINES` | `350` | Files above this line count are delegated |
-| `SHUNT_TIMEOUT_SECONDS` | `45` | Worker timeout — fail-open if exceeded |
+| `SHUNT_TIMEOUT_SECONDS` | `90` | Worker timeout — fail-open if exceeded |
 | `SHUNT_MAX_BYTES` | `400000` | Max payload bytes (macOS: 400000, Linux: 120000) |
 | `WORKER_URL` | _(unset)_ | Unset = subprocess mode, set = HTTP mode |
 | `WORKER_PORT` | `8080` | HTTP server port |
 | `SHUNT_METRICS_FILE` | `/tmp/trim-metrics.jsonl` | Delegation log path |
-
-### Switching models
-
-Change `WORKER_MODEL` in `.env` — no code changes needed:
-
-```bash
-# OpenRouter (free tier — good default)
-WORKER_MODEL=openrouter/google/gemma-3n-e4b-it:free
-
-# Best quality via OpenRouter
-WORKER_MODEL=openrouter/google/gemini-2.5-flash
-
-# Direct Google API
-WORKER_MODEL=gemini/gemini-2.5-flash
-GEMINI_API_KEY=...
-
-# Direct Anthropic (Haiku — fast and cheap)
-WORKER_MODEL=claude-haiku-4-5-20251001
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Local Ollama (zero cost, no internet)
-WORKER_MODEL=ollama/qwen2.5-coder:7b
-# no key needed
-```
+| `TRIM_API_KEY` | _(unset)_ | Optional shared secret for the `/bulk-read` endpoint |
 
 ---
 
@@ -172,7 +204,17 @@ WORKER_MODEL=ollama/qwen2.5-coder:7b
 | `Bash: cat file \| grep foo` | piped | → pass through |
 | `Bash: cat *.log` | glob | → pass through |
 
-TRIM always **fail-opens**: if the worker is unavailable, times out, or errors, Claude reads the file normally. Nothing breaks.
+---
+
+## Dashboard
+
+The worker serves a live metrics dashboard at `http://localhost:8080/dashboard`. It auto-refreshes every 30 seconds and shows:
+
+- Total delegations and tokens intercepted
+- Estimated cost saved vs Claude Sonnet pricing
+- Average worker latency
+- Delegations by day (bar chart)
+- Recent delegation log
 
 ---
 
@@ -183,7 +225,7 @@ Every delegation appends one JSON line to `/tmp/trim-metrics.jsonl`:
 ```json
 {"ts": 1234567890.1, "file": "/src/Service.java", "lines": 420,
  "latency_ms": 1823.4, "input_tokens": 3100, "output_tokens": 180,
- "mode": "http", "model": "openrouter/google/gemma-3n-e4b-it:free"}
+ "mode": "http", "model": "gpt-4.1-nano"}
 ```
 
 Quick summary of savings:
@@ -208,13 +250,14 @@ print(f'Avg latency : {sum(r[\"latency_ms\"] for r in rows)/len(rows):.0f} ms')
 TRIM/
 ├── .claude/
 │   ├── hooks/
-│   │   ├── check-file-size.sh    # PreToolUse → Read (used in subprocess mode)
-│   │   └── check-bash-read.sh    # PreToolUse → Bash (used in subprocess mode)
+│   │   ├── check-file-size.sh    # PreToolUse → Read
+│   │   └── check-bash-read.sh    # PreToolUse → Bash
 │   └── settings.json             # Hook registrations (for developing TRIM itself)
 ├── worker/
 │   ├── config.py                 # Env-var configuration
 │   ├── metrics.py                # JSONL metrics writer
-│   ├── server.py                 # FastAPI: /health + /bulk-read
+│   ├── dashboard.py              # Metrics dashboard renderer
+│   ├── server.py                 # FastAPI: /health + /bulk-read + /dashboard
 │   ├── __main__.py               # CLI: bulk-read / serve
 │   ├── backends/
 │   │   └── litellm_backend.py    # LiteLLM wrapper (all providers)
@@ -249,7 +292,7 @@ python -m worker bulk-read --file /path/to/any/large/file.py
 ## Caveats
 
 - **Summaries are lossy.** TRIM trades full fidelity for token savings. If Claude needs exact line numbers or a precise code snippet, it will ask to read the file directly — that read passes through normally.
-- **Free-tier rate limits.** The default model (`gemma-3n-e4b-it:free`) has rate limits. For heavy use, switch to a paid model or run Ollama locally.
+- **Free-tier rate limits.** Free models on OpenRouter have rate limits. For heavy use, switch to a paid model or run Ollama locally.
 - **Works with Claude Code only.** TRIM uses PreToolUse hooks, which are a Claude Code feature. It does not work with the API directly or other clients.
 
 ---

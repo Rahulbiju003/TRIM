@@ -64,8 +64,8 @@ MAX_BYTES="${SHUNT_MAX_BYTES:-400000}"
 LINE_COUNT="$(wc -l < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
 BYTE_COUNT="$(wc -c < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
 
-(( LINE_COUNT < MIN_LINES )) && exit 0
-(( BYTE_COUNT > MAX_BYTES )) && exit 0
+if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
+if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
 
 # ── delegate to worker ────────────────────────────────────────────────────────
 WORKER_URL="${WORKER_URL:-}"
@@ -84,7 +84,7 @@ print(json.dumps({'file_path': fp, 'content': content}))
     [[ -n "$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
 
     # shellcheck disable=SC2086
-    RESPONSE="$(echo "$PAYLOAD" | curl -sf \
+    RESPONSE="$(printf '%s\n' "$PAYLOAD" | curl -sf \
         -X POST "${WORKER_URL}/bulk-read" \
         -H 'Content-Type: application/json' \
         --data-binary @- \
@@ -117,8 +117,10 @@ context = (
 
 print(json.dumps({
     'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse',
         'permissionDecision': 'deny',
+        'permissionDecisionReason': 'File routed to cheap LLM by TRIM',
+        'additionalContext': context,
     },
-    'additionalContext': context,
 }))
 " "$SUMMARY" "$FILE_PATH" "$LINE_COUNT"

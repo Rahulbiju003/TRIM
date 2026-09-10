@@ -1,5 +1,5 @@
 ---
-# compose.yaml — local Podman/Docker Compose for the shunt worker
+# compose.yaml — local Podman/Docker Compose for the TRIM worker
 #
 # Usage:
 #   cp .env.example .env   # fill in OPENROUTER_API_KEY
@@ -12,25 +12,24 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    image: shunt-worker:latest
-    container_name: shunt-worker
+    image: trim-worker:latest
+    container_name: trim-worker
     restart: unless-stopped
     ports:
       - "${WORKER_PORT:-8080}:${WORKER_PORT:-8080}"
     env_file:
       - .env
     environment:
-      # These can be overridden here or in .env
       - WORKER_MODEL=${WORKER_MODEL:-openrouter/google/gemma-3n-e4b-it:free}
       - WORKER_PORT=${WORKER_PORT:-8080}
       - WORKER_TEMPERATURE=${WORKER_TEMPERATURE:-0.2}
       - SHUNT_MIN_LINES=${SHUNT_MIN_LINES:-350}
       - SHUNT_TIMEOUT_SECONDS=${SHUNT_TIMEOUT_SECONDS:-45}
       - SHUNT_MAX_BYTES=${SHUNT_MAX_BYTES:-400000}
-      - SHUNT_METRICS_FILE=/tmp/shunt-metrics.jsonl
+      - SHUNT_METRICS_FILE=/tmp/trim-metrics.jsonl
     volumes:
       # Persist metrics outside the container
-      - shunt-metrics:/tmp
+      - trim-metrics:/tmp
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
@@ -40,4 +39,4 @@ services:
       start_period: 10s
 
 volumes:
-  shunt-metrics:
+  trim-metrics:
