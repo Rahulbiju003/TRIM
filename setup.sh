@@ -112,6 +112,10 @@ LIMIT="\$(echo "\$HOOK_JSON"    | python3 -c "import json,sys; d=json.load(sys.s
 [[ -n "\$OFFSET" || -n "\$LIMIT" ]] && exit 0
 
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
+# wc -l counts newlines; files without a trailing newline lose one count
+if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != \$'\n' ]]; then
+    LINE_COUNT=\$(( LINE_COUNT + 1 ))
+fi
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
 if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
@@ -190,6 +194,10 @@ PYEOF
 [[ -z "\$FILE_PATH" || ! -f "\$FILE_PATH" ]] && exit 0
 
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
+# wc -l counts newlines; files without a trailing newline lose one count
+if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != \$'\n' ]]; then
+    LINE_COUNT=\$(( LINE_COUNT + 1 ))
+fi
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
 if (( LINE_COUNT < MIN_LINES )); then exit 0; fi

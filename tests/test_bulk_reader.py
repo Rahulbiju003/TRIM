@@ -118,13 +118,13 @@ class TestRunFromContent:
         assert result.file_path == "/important/file.py"
 
     def test_line_count_correct(self, isolated_metrics):
-        content = "a\nb\nc\n"  # 3 newlines → 4 lines (count("\n")+1)
+        content = "a\nb\nc\n"  # 3 text lines; trailing newline is not a 4th line
         reader = BulkReaderMode(backend=_mock_backend())
         result = reader.run_from_content("/x.py", content, mode="http")
-        assert result.line_count == 4
+        assert result.line_count == 3
 
     def test_line_count_no_trailing_newline(self, isolated_metrics):
-        content = "a\nb\nc"  # 2 newlines → 3 lines
+        content = "a\nb\nc"  # 3 lines, no trailing newline
         reader = BulkReaderMode(backend=_mock_backend())
         result = reader.run_from_content("/x.py", content, mode="http")
         assert result.line_count == 3
@@ -201,9 +201,8 @@ class TestRun:
     def test_line_count_matches_file(self, large_file, isolated_metrics):
         reader = BulkReaderMode(backend=_mock_backend())
         result = reader.run(str(large_file))
-        # large_file writes range(400) joined by "\n" plus trailing "\n"
-        # = 400 newlines → content.count("\n") + 1 = 401
-        assert result.line_count == 401
+        # large_file: 400 text lines + trailing "\n" → splitlines() = 400
+        assert result.line_count == 400
 
     def test_missing_file_raises(self, isolated_metrics):
         reader = BulkReaderMode(backend=_mock_backend())

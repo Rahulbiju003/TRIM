@@ -62,6 +62,10 @@ MIN_LINES="${SHUNT_MIN_LINES:-350}"
 MAX_BYTES="${SHUNT_MAX_BYTES:-400000}"
 
 LINE_COUNT="$(wc -l < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
+# wc -l counts newlines; files without a trailing newline lose one count
+if [[ "$LINE_COUNT" -gt 0 ]] && [[ "$(tail -c 1 "$FILE_PATH" 2>/dev/null)" != $'\n' ]]; then
+    LINE_COUNT=$(( LINE_COUNT + 1 ))
+fi
 BYTE_COUNT="$(wc -c < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
 
 if (( LINE_COUNT < MIN_LINES )); then exit 0; fi

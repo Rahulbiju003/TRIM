@@ -48,7 +48,7 @@ class BulkReaderMode:
     def run(self, file_path: str, question: str | None = None) -> BulkReadResult:
         """Read *file_path* and return a LLM-generated summary."""
         content = self._read_file(file_path)
-        line_count = content.count("\n") + 1
+        line_count = len(content.splitlines())
         question = question or DEFAULT_QUESTION
         user_message = self._build_user_message(file_path, content, question)
 
@@ -80,7 +80,7 @@ class BulkReaderMode:
         self, file_path: str, content: str, question: str | None = None, mode: str = "http"
     ) -> BulkReadResult:
         """Like run() but caller provides file content (used in HTTP mode)."""
-        line_count = content.count("\n") + 1
+        line_count = len(content.splitlines())
         question = question or DEFAULT_QUESTION
         user_message = self._build_user_message(file_path, content, question)
 
