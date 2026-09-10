@@ -1,0 +1,43 @@
+---
+# compose.yaml — local Podman/Docker Compose for the shunt worker
+#
+# Usage:
+#   cp .env.example .env   # fill in OPENROUTER_API_KEY
+#   podman-compose up -d
+#   # configure WORKER_URL=http://localhost:8080 in your project's .env
+#   podman-compose down
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: shunt-worker:latest
+    container_name: shunt-worker
+    restart: unless-stopped
+    ports:
+      - "${WORKER_PORT:-8080}:${WORKER_PORT:-8080}"
+    env_file:
+      - .env
+    environment:
+      # These can be overridden here or in .env
+      - WORKER_MODEL=${WORKER_MODEL:-openrouter/google/gemma-3n-e4b-it:free}
+      - WORKER_PORT=${WORKER_PORT:-8080}
+      - WORKER_TEMPERATURE=${WORKER_TEMPERATURE:-0.2}
+      - SHUNT_MIN_LINES=${SHUNT_MIN_LINES:-350}
+      - SHUNT_TIMEOUT_SECONDS=${SHUNT_TIMEOUT_SECONDS:-45}
+      - SHUNT_MAX_BYTES=${SHUNT_MAX_BYTES:-400000}
+      - SHUNT_METRICS_FILE=/tmp/shunt-metrics.jsonl
+    volumes:
+      # Persist metrics outside the container
+      - shunt-metrics:/tmp
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  shunt-metrics:
