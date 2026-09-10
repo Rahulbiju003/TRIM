@@ -2,9 +2,6 @@
 **Token Routing Intelligence Middleware**
 
 TRIM is a harness for Claude Code that intercepts expensive file reads and routes them to a cheaper LLM, returning a compact summary instead of loading the full file into context. It sits between Claude and your codebase as a transparent proxy — Claude never knows the difference, but your token bill does.
-
-Inspired by [Spotify's Portal](https://engineering.atspotify.com/2026/09/portal-by-spotify-cut-my-claude-code-token-usage-by-90/), which reported ~90% token reduction on large file reads.
-
 ---
 
 ## How it works
@@ -18,7 +15,7 @@ PreToolUse Hook (TRIM)
     │
     ├─ file < 350 lines? → pass through, Claude reads normally
     │
-    └─ file ≥ 350 lines? → send to cheap LLM (via Podman or subprocess)
+    └─ file ≥ 350 lines? → send to cheap LLM (Podman worker)
                                │
                                ▼
                          Worker (LiteLLM)
@@ -40,8 +37,8 @@ TRIM also intercepts `cat`, `head`, `tail` calls on large files via the Bash hoo
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/yourname/trim.git
-cd trim
+git clone https://github.com/Rahulbiju003/TRIM.git
+cd TRIM
 cp .env.example .env
 ```
 
@@ -59,7 +56,6 @@ Everything else works with the defaults.
 podman-compose up -d
 ```
 
-This builds the image and starts the worker on `http://localhost:8080`.
 Verify it is running:
 
 ```bash
@@ -75,9 +71,8 @@ Run this from the TRIM directory, pointing at your project:
 ./setup.sh --install /path/to/your/project
 ```
 
-This copies two hook scripts into your project's `.claude/hooks/` and patches
-`.claude/settings.json`. The hooks use `curl` to talk to the running container —
-no Python needed on your host machine.
+This generates two hook scripts in your project's `.claude/hooks/` and patches
+`.claude/settings.json`. The hooks use only `curl` — no Python needed on your host.
 
 ### 4. Open Claude Code in your project
 
@@ -88,18 +83,18 @@ TRIM is now active. Large file reads are routed automatically. Check
 
 ## Setup options
 
-| Mode | When to use | Command |
-|------|------------|---------|
-| **Podman (local)** | Default, solo dev | `podman-compose up -d` |
-| **Podman (remote)** | Shared team server | Set `WORKER_URL=https://your-server` |
-| **Subprocess** | No container runtime | `./setup.sh --local` (uses bundled venv) |
+| Mode | When to use | How |
+|------|------------|-----|
+| **Podman (local)** | Solo dev, default | `podman-compose up -d` then `./setup.sh --install` |
+| **Podman (remote)** | Shared team server | `WORKER_URL=https://your-server ./setup.sh --install` |
+| **Subprocess** | No container runtime | `./setup.sh --local --install` (uses local venv) |
 
 ### Podman remote (team setup)
 
-Deploy the container on any server, then on each developer machine:
+Deploy the container on any server reachable by your team, then on each developer machine:
 
 ```bash
-WORKER_URL=https://trim.internal ./setup.sh --install ~/projects/my-app
+WORKER_URL=https://trim.yourteam.internal ./setup.sh --install ~/projects/my-app
 ```
 
 All developers share one worker — one API key, centralised metrics.
@@ -107,7 +102,7 @@ All developers share one worker — one API key, centralised metrics.
 ### Subprocess mode (no container)
 
 If you cannot run Podman, TRIM can invoke the worker as a local subprocess.
-It needs Python 3.10+ and the venv set up once:
+Set up the venv once:
 
 ```bash
 python3 -m venv .venv
@@ -115,7 +110,11 @@ python3 -m venv .venv
 ./setup.sh --local --install /path/to/your/project
 ```
 
-The hooks resolve the venv automatically via `CLAUDE_PROJECT_DIR`.
+### Removing TRIM from a project
+
+```bash
+./setup.sh --uninstall /path/to/your/project
+```
 
 ---
 
@@ -136,7 +135,7 @@ All configuration lives in `.env`. Copy `.env.example` to get started.
 
 ### Switching models
 
-Change `WORKER_MODEL` to any LiteLLM-supported provider — no code changes needed:
+Change `WORKER_MODEL` in `.env` — no code changes needed:
 
 ```bash
 # OpenRouter (free tier — good default)
@@ -185,7 +184,7 @@ Every delegation appends one JSON line to `/tmp/trim-metrics.jsonl`:
  "mode": "http", "model": "openrouter/google/gemma-3n-e4b-it:free"}
 ```
 
-Quick summary of savings so far:
+Quick summary of savings:
 
 ```bash
 cat /tmp/trim-metrics.jsonl | python3 -c "
@@ -204,12 +203,12 @@ print(f'Avg latency : {sum(r[\"latency_ms\"] for r in rows)/len(rows):.0f} ms')
 ## Project layout
 
 ```
-trim/
+TRIM/
 ├── .claude/
 │   ├── hooks/
-│   │   ├── check-file-size.sh    # PreToolUse → Read
-│   │   └── check-bash-read.sh    # PreToolUse → Bash
-│   └── settings.json             # Hook registrations
+│   │   ├── check-file-size.sh    # PreToolUse → Read (used in subprocess mode)
+│   │   └── check-bash-read.sh    # PreToolUse → Bash (used in subprocess mode)
+│   └── settings.json             # Hook registrations (for developing TRIM itself)
 ├── worker/
 │   ├── config.py                 # Env-var configuration
 │   ├── metrics.py                # JSONL metrics writer
@@ -219,14 +218,11 @@ trim/
 │   │   └── litellm_backend.py    # LiteLLM wrapper (all providers)
 │   └── modes/
 │       └── bulk_reader.py        # Core summarisation logic
-├── mock_project/                 # Large sample files for testing
-├── tests/
-│   ├── unit/                     # Config, bulk_reader, server
-│   ├── integration/              # Routing, CLI, HTTP mode
-│   └── e2e/
 ├── Containerfile                 # Podman/Docker image
 ├── compose.yaml                  # Local container stack
-└── .env.example                  # Configuration template
+├── setup.sh                      # Install/uninstall helper
+├── .env.example                  # Configuration template
+└── requirements.txt
 ```
 
 ---
@@ -234,20 +230,16 @@ trim/
 ## Development
 
 ```bash
-# Clone and set up
-git clone https://github.com/yourname/trim.git && cd trim
+git clone https://github.com/Rahulbiju003/TRIM.git && cd TRIM
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 
-# Run tests (no API key needed — LLM is mocked)
-pytest
-
-# Try the CLI against a real file (needs API key in .env)
-source .env
-python -m worker bulk-read --file mock_project/src/analytics/pipeline.py
-
-# Start the HTTP server locally
+# Start the HTTP server locally (no container)
 python -m worker serve
+
+# Try the CLI directly (needs API key in .env)
+source .env
+python -m worker bulk-read --file /path/to/any/large/file.py
 ```
 
 ---
