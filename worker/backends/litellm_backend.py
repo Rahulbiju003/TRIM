@@ -31,7 +31,10 @@ class LiteLLMBackend:
         temperature: float | None = None,
     ) -> None:
         self.model = model or config.WORKER_MODEL
-        self.temperature = temperature if temperature is not None else config.WORKER_TEMPERATURE
+        # Explicit arg wins; fall back to config; None = let LiteLLM/provider decide
+        self.temperature: float | None = (
+            temperature if temperature is not None else config.WORKER_TEMPERATURE
+        )
         # Suppress verbose litellm logs unless caller opts in
         litellm.suppress_debug_info = True
         os.environ.setdefault("LITELLM_LOG", "ERROR")
@@ -42,12 +45,14 @@ class LiteLLMBackend:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        response = litellm.completion(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            timeout=config.SHUNT_TIMEOUT_SECONDS,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "timeout": config.SHUNT_TIMEOUT_SECONDS,
+        }
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        response = litellm.completion(**kwargs)
         choice = response.choices[0]
         content: str = choice.message.content or ""
         usage = getattr(response, "usage", None)

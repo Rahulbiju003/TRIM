@@ -119,6 +119,37 @@ class TestFloatCoercion:
         assert _float("TEST_TRIM_FLOAT", 99.0) == pytest.approx(0.0)
 
 
+class TestOptionalFloat:
+    """_optional_float() — returns None when unset, float when set."""
+
+    def test_returns_none_when_missing(self, monkeypatch):
+        monkeypatch.delenv("TEST_OPT_FLOAT", raising=False)
+        from worker.config import _optional_float
+        assert _optional_float("TEST_OPT_FLOAT") is None
+
+    def test_returns_none_when_empty(self, monkeypatch):
+        monkeypatch.setenv("TEST_OPT_FLOAT", "")
+        from worker.config import _optional_float
+        assert _optional_float("TEST_OPT_FLOAT") is None
+
+    def test_returns_float_when_set(self, monkeypatch):
+        monkeypatch.setenv("TEST_OPT_FLOAT", "0.7")
+        from worker.config import _optional_float
+        assert _optional_float("TEST_OPT_FLOAT") == pytest.approx(0.7)
+
+    def test_returns_none_on_invalid_value(self, monkeypatch, capsys):
+        monkeypatch.setenv("TEST_OPT_FLOAT", "bad")
+        from worker.config import _optional_float
+        assert _optional_float("TEST_OPT_FLOAT") is None
+        assert "ERROR" in capsys.readouterr().err
+
+    def test_zero_is_valid(self, monkeypatch):
+        monkeypatch.setenv("TEST_OPT_FLOAT", "0.0")
+        from worker.config import _optional_float
+        # 0.0 is a valid (if unusual) temperature; must not be treated as unset
+        assert _optional_float("TEST_OPT_FLOAT") == pytest.approx(0.0)
+
+
 class TestWorkerUrl:
     """WORKER_URL trailing-slash stripping."""
 

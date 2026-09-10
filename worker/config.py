@@ -27,10 +27,22 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+def _optional_float(name: str) -> float | None:
+    """Like _float but returns None when unset — lets the caller/provider decide."""
+    val = os.environ.get(name, "")
+    if not val:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        print(f"[TRIM] ERROR: {name}={val!r} is not a valid number. Ignoring.", file=sys.stderr)
+        return None
+
+
 # ── Provider / model ──────────────────────────────────────────────────────────
 # No default: validate() will catch a missing value at startup.
 WORKER_MODEL: str = os.environ.get("WORKER_MODEL", "")
-WORKER_TEMPERATURE: float = _float("WORKER_TEMPERATURE", 0.2)
+WORKER_TEMPERATURE: float | None = _optional_float("WORKER_TEMPERATURE")
 
 # ── Routing thresholds ────────────────────────────────────────────────────────
 SHUNT_MIN_LINES: int = _int("SHUNT_MIN_LINES", 350)

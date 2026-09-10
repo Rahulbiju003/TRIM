@@ -52,6 +52,11 @@ class TestLiteLLMBackendInit:
         backend = LiteLLMBackend()
         assert backend.temperature == pytest.approx(0.7)
 
+    def test_temperature_none_when_config_unset(self, monkeypatch):
+        monkeypatch.setattr("worker.config.WORKER_TEMPERATURE", None)
+        backend = LiteLLMBackend()
+        assert backend.temperature is None
+
     def test_explicit_temperature_overrides_config(self, monkeypatch):
         monkeypatch.setattr("worker.config.WORKER_TEMPERATURE", 0.2)
         backend = LiteLLMBackend(temperature=0.9)
@@ -59,7 +64,7 @@ class TestLiteLLMBackendInit:
 
     def test_temperature_zero_is_valid(self):
         backend = LiteLLMBackend(temperature=0.0)
-        assert backend.temperature == 0.0
+        assert backend.temperature == pytest.approx(0.0)
 
 
 class TestComplete:
@@ -113,6 +118,22 @@ class TestComplete:
         backend = LiteLLMBackend(model="m")
         backend.complete("sys", "usr")
         assert mock_litellm.call_args[1]["timeout"] == 99
+
+    @patch("worker.backends.litellm_backend.litellm.completion")
+    def test_temperature_passed_when_set(self, mock_litellm):
+        mock_litellm.return_value = _make_litellm_response()
+        backend = LiteLLMBackend(model="m", temperature=0.3)
+        backend.complete("sys", "usr")
+        assert mock_litellm.call_args[1]["temperature"] == pytest.approx(0.3)
+
+    @patch("worker.backends.litellm_backend.litellm.completion")
+    def test_temperature_omitted_when_none(self, mock_litellm, monkeypatch):
+        """When WORKER_TEMPERATURE is unset, temperature must not be sent to LiteLLM."""
+        mock_litellm.return_value = _make_litellm_response()
+        monkeypatch.setattr("worker.backends.litellm_backend.config.WORKER_TEMPERATURE", None)
+        backend = LiteLLMBackend(model="m")
+        backend.complete("sys", "usr")
+        assert "temperature" not in mock_litellm.call_args[1]
 
     @patch("worker.backends.litellm_backend.litellm.completion")
     def test_raises_on_litellm_error(self, mock_litellm):
