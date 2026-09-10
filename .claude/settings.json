@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/bash .claude/hooks/check-file-size.sh"
+            "command": "/bin/bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/check-file-size.sh",
+            "timeout": 60
           }
         ]
       },
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/bin/bash .claude/hooks/check-bash-read.sh"
+            "command": "/bin/bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/check-bash-read.sh",
+            "timeout": 60
           }
         ]
       }

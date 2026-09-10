@@ -315,11 +315,19 @@ hooks = [h for h in hooks if "trim-check" not in str(h.get("hooks", ""))]
 hooks += [
     {
         "matcher": "Read",
-        "hooks": [{"type": "command", "command": "/bin/bash .claude/hooks/trim-check-file-size.sh"}],
+        "hooks": [{
+            "type": "command",
+            "command": "/bin/bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/trim-check-file-size.sh",
+            "timeout": 60,
+        }],
     },
     {
         "matcher": "Bash",
-        "hooks": [{"type": "command", "command": "/bin/bash .claude/hooks/trim-check-bash-read.sh"}],
+        "hooks": [{
+            "type": "command",
+            "command": "/bin/bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/trim-check-bash-read.sh",
+            "timeout": 60,
+        }],
     },
 ]
 
