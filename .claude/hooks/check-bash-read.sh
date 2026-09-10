@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# PreToolUse hook for the Bash tool.
+# TRIM — PreToolUse hook for the Bash tool.
 # Intercepts: cat / head / tail / less / more on large files.
-# Piped commands and other bash commands pass through unchanged.
+# Piped commands and anything else pass through unchanged.
 #
-# Hook input (stdin): JSON with tool_name and tool_input.command
-# Hook output (stdout): JSON with additionalContext | exit 0 (pass-through)
+# Hook input  (stdin):  JSON with tool_name and tool_input.command
+# Hook output (stdout): JSON with permissionDecision=deny + additionalContext
+#                       OR nothing (exit 0 = pass-through).
 
 set -euo pipefail
 
@@ -12,9 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 PYTHON="${PROJECT_ROOT}/.venv/bin/python"
 
-if [[ ! -x "$PYTHON" ]]; then
-    exit 0
-fi
+[[ ! -x "$PYTHON" ]] && exit 0
 
 ENV_FILE="${PROJECT_ROOT}/.env"
 if [[ -f "$ENV_FILE" ]]; then
@@ -23,132 +22,103 @@ fi
 
 HOOK_JSON="$(cat)"
 
-# Extract the bash command string
-COMMAND="$(echo "$HOOK_JSON" | "$PYTHON" -c "
+COMMAND="$("$PYTHON" -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.loads(sys.stdin.read())
 print(d.get('tool_input', {}).get('command', ''))
-")"
+" <<< "$HOOK_JSON")" || exit 0
 
 [[ -z "$COMMAND" ]] && exit 0
 
-# ── detect: simple read-only commands (no pipes, no redirects) ───────────────
-# Must match: cat FILE, head FILE, tail FILE, less FILE, more FILE
-# Must NOT match: cat file | grep ..., cat file > out, cat *.log (glob patterns)
-
-"$PYTHON" - "$COMMAND" <<'EOF'
+# ── detect simple read-only commands (no pipes, no redirects, no globs) ───────
+FILE_PATH="$("$PYTHON" - "$COMMAND" << 'PYEOF'
 import re, sys
 
 cmd = sys.argv[1]
 
-# Reject piped or redirected commands
+# Reject piped or redirected commands — pass through for complex usage
 if '|' in cmd or '>' in cmd or '<' in cmd:
     sys.exit(1)
 
-# Match: (cat|head|tail|less|more) [flags] SINGLE_FILE
+# Match: (cat|head|tail|less|more) [optional-flags] SINGLE_FILE
 pattern = r'^(cat|head|tail|less|more)\s+(?:-\S+\s+)*(\S+)$'
 m = re.match(pattern, cmd.strip())
 if not m:
     sys.exit(1)
 
 file_path = m.group(2)
-# Reject glob patterns
+# Reject globs — pass through
 if '*' in file_path or '?' in file_path:
     sys.exit(1)
 
 print(file_path)
-EOF
-FILE_PATH="$?"
-
-# If the Python script exited non-zero, pass through
-if (( FILE_PATH != 0 )); then
-    exit 0
-fi
-
-# Re-run to get the actual file path string
-FILE_PATH="$("$PYTHON" - "$COMMAND" <<'EOF'
-import re, sys
-
-cmd = sys.argv[1]
-if '|' in cmd or '>' in cmd or '<' in cmd:
-    sys.exit(1)
-
-pattern = r'^(cat|head|tail|less|more)\s+(?:-\S+\s+)*(\S+)$'
-m = re.match(pattern, cmd.strip())
-if not m:
-    sys.exit(1)
-
-file_path = m.group(2)
-if '*' in file_path or '?' in file_path:
-    sys.exit(1)
-
-print(file_path)
-EOF
+PYEOF
 )" || exit 0
 
 [[ -z "$FILE_PATH" || ! -f "$FILE_PATH" ]] && exit 0
 
-# ── check line count ──────────────────────────────────────────────────────────
+# ── routing checks ────────────────────────────────────────────────────────────
 MIN_LINES="${SHUNT_MIN_LINES:-350}"
-LINE_COUNT="$(wc -l < "$FILE_PATH" 2>/dev/null || echo 0)"
-LINE_COUNT="${LINE_COUNT// /}"
-
-if (( LINE_COUNT < MIN_LINES )); then
-    exit 0
-fi
-
 MAX_BYTES="${SHUNT_MAX_BYTES:-400000}"
-BYTE_COUNT="$(wc -c < "$FILE_PATH" 2>/dev/null || echo 0)"
-BYTE_COUNT="${BYTE_COUNT// /}"
 
-if (( BYTE_COUNT > MAX_BYTES )); then
-    exit 0
-fi
+LINE_COUNT="$(wc -l < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
+BYTE_COUNT="$(wc -c < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
 
-# ── delegate ──────────────────────────────────────────────────────────────────
+(( LINE_COUNT < MIN_LINES )) && exit 0
+(( BYTE_COUNT > MAX_BYTES )) && exit 0
+
+# ── delegate to worker ────────────────────────────────────────────────────────
 WORKER_URL="${WORKER_URL:-}"
+TRIM_API_KEY="${TRIM_API_KEY:-}"
 
 if [[ -n "$WORKER_URL" ]]; then
-    CONTENT="$(cat "$FILE_PATH")"
-    PAYLOAD="$(printf '%s' "$CONTENT" | "$PYTHON" -c "
+    PAYLOAD="$("$PYTHON" -c "
 import json, sys
-content = sys.stdin.read()
-print(json.dumps({'file_path': '${FILE_PATH}', 'content': content}))
-")"
-    RESPONSE="$(curl -sf \
+fp = sys.argv[1]
+with open(fp, encoding='utf-8', errors='replace') as f:
+    content = f.read()
+print(json.dumps({'file_path': fp, 'content': content}))
+" "$FILE_PATH")" || exit 0
+
+    AUTH_HEADER=""
+    [[ -n "$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
+
+    # shellcheck disable=SC2086
+    RESPONSE="$(echo "$PAYLOAD" | curl -sf \
         -X POST "${WORKER_URL}/bulk-read" \
         -H 'Content-Type: application/json' \
-        -d "$PAYLOAD" \
-        --max-time "${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || { exit 0; }
-    SUMMARY="$(echo "$RESPONSE" | "$PYTHON" -c "
+        --data-binary @- \
+        ${AUTH_HEADER:+"$AUTH_HEADER"} \
+        --max-time "${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
+
+    SUMMARY="$("$PYTHON" -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.loads(sys.stdin.read())
 print(d.get('summary', ''))
-")"
+" <<< "$RESPONSE")" || exit 0
 else
-    SUMMARY="$("$PYTHON" -m worker bulk-read --file "$FILE_PATH" 2>/dev/null)" || { exit 0; }
+    SUMMARY="$("$PYTHON" -m worker bulk-read --file "$FILE_PATH" 2>/dev/null)" || exit 0
 fi
 
 [[ -z "$SUMMARY" ]] && exit 0
 
+# ── emit hook response ────────────────────────────────────────────────────────
 "$PYTHON" -c "
 import json, sys
-
-summary = sys.argv[1]
+summary   = sys.argv[1]
 file_path = sys.argv[2]
-line_count = int(sys.argv[3])
+line_count = sys.argv[3]
 
 context = (
-    f'[shunt] Delegated bash read of {file_path} ({line_count} lines) to cheap LLM.\n'
-    f'Summary:\n{summary}\n'
-    f'(Full file NOT loaded into context — use this summary instead.)'
+    f'[TRIM] Delegated bash read of {file_path} ({line_count} lines) to cheap LLM.\n'
+    f'Summary:\n{summary}\n\n'
+    f'(Full file was NOT loaded — use this summary to answer the question.)'
 )
 
 print(json.dumps({
     'hookSpecificOutput': {
-        'permissionDecision': 'allow',
+        'permissionDecision': 'deny',
     },
     'additionalContext': context,
-    'suppressToolUse': True,
 }))
 " "$SUMMARY" "$FILE_PATH" "$LINE_COUNT"

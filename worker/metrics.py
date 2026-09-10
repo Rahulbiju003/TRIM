@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -32,7 +33,9 @@ def log(
         }
         path = Path(config.SHUNT_METRICS_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as fh:
+        # Open with O_CREAT | O_WRONLY | O_APPEND and mode 0o600 (owner read/write only)
+        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as fh:
             fh.write(json.dumps(record) + "\n")
     except Exception:
         pass  # metrics must never crash the main path

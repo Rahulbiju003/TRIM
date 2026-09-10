@@ -3,28 +3,47 @@
 Endpoints:
   GET  /health        → {"status": "ok", "model": "..."}
   POST /bulk-read     → {"summary": "...", "line_count": N, ...}
+
+Auth (optional):
+  Set TRIM_API_KEY env var on the server. Callers must then send:
+    X-TRIM-Key: <key>
+  Leave TRIM_API_KEY unset to disable auth (local/trusted use).
 """
 from __future__ import annotations
 
+import secrets
+
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from worker import config
 from worker.backends.litellm_backend import LiteLLMBackend
 from worker.modes.bulk_reader import BulkReaderMode
 
-app = FastAPI(title="shunt-worker", version="0.1.0")
+app = FastAPI(title="trim-worker", version="0.1.0")
 
 # Shared backend (one per process)
 _backend = LiteLLMBackend()
 _reader = BulkReaderMode(backend=_backend)
 
+# Max content size: slightly above SHUNT_MAX_BYTES to match hook-side guard
+_MAX_CONTENT_BYTES = config.SHUNT_MAX_BYTES + 4096
+
+
+def _check_auth(request: Request) -> None:
+    """Verify X-TRIM-Key header when TRIM_API_KEY is configured."""
+    if not config.TRIM_API_KEY:
+        return  # auth disabled
+    provided = request.headers.get("X-TRIM-Key", "")
+    if not secrets.compare_digest(provided, config.TRIM_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-TRIM-Key")
+
 
 class BulkReadRequest(BaseModel):
-    file_path: str
-    content: str
-    question: str | None = None
+    file_path: str = Field(..., max_length=4096)
+    content: str = Field(..., max_length=_MAX_CONTENT_BYTES)
+    question: str | None = Field(default=None, max_length=2048)
 
 
 class BulkReadResponse(BaseModel):
@@ -43,7 +62,8 @@ def health() -> dict:
 
 
 @app.post("/bulk-read", response_model=BulkReadResponse)
-def bulk_read(req: BulkReadRequest) -> BulkReadResponse:
+def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
+    _check_auth(request)
     try:
         result = _reader.run_from_content(
             file_path=req.file_path,
