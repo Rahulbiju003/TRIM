@@ -258,3 +258,19 @@ class TestRenderHtml:
         stats = dashboard.compute_stats([])
         html = dashboard.render_html(stats)
         assert "TRIM" in html
+
+    def test_worker_model_html_escaped(self, sample_records, monkeypatch):
+        """Model name with HTML special chars must be escaped in the dashboard."""
+        monkeypatch.setattr("worker.config.WORKER_MODEL", "<script>alert(1)</script>")
+        monkeypatch.setattr("worker.dashboard.config.WORKER_MODEL", "<script>alert(1)</script>")
+        stats = dashboard.compute_stats(sample_records)
+        html = dashboard.render_html(stats)
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_empty_worker_model_shows_placeholder(self, sample_records, monkeypatch):
+        monkeypatch.setattr("worker.config.WORKER_MODEL", "")
+        monkeypatch.setattr("worker.dashboard.config.WORKER_MODEL", "")
+        stats = dashboard.compute_stats(sample_records)
+        html = dashboard.render_html(stats)
+        assert "(not set)" in html

@@ -274,6 +274,11 @@ const RECENT = {recent_json};
 const DAILY = {daily_json};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+function esc(s) {{
+  return String(s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}}
 function fmtTok(n) {{
   if (n >= 1e6) return (n/1e6).toFixed(2) + "M";
   if (n >= 1e3) return (n/1e3).toFixed(1) + "K";
@@ -351,7 +356,7 @@ if (Object.keys(models).length) {{
       const el = document.createElement("div");
       el.className = "model-card";
       el.innerHTML = `
-        <div class="model-name">${{name}}</div>
+        <div class="model-name">${{esc(name)}}</div>
         <div class="model-stats">
           <div class="mstat">
             <div class="mstat-label">Delegations</div>
@@ -373,7 +378,7 @@ if (Object.keys(models).length) {{
         <div class="model-cost-bar">
           <div class="model-cost-bar-fill" style="width:${{pct}}%"></div>
         </div>
-        ${{!m.known_price ? '<div class="unknown-price">⚠ pricing estimated</div>' : ''}}
+        ${{!m.known_price ? '<div class="unknown-price">&#9888; pricing estimated</div>' : ''}}
       `;
       grid.appendChild(el);
     }});
@@ -389,15 +394,15 @@ if (RECENT.length) {{
     const short = r.file.length > 44 ? "\u2026" + r.file.slice(-41) : r.file;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="num">${{r.ts_human}}</td>
-      <td class="path" title="${{r.file.replace(/"/g,"&quot;")}}">${{short}}</td>
+      <td class="num">${{esc(r.ts_human)}}</td>
+      <td class="path" title="${{esc(r.file)}}">${{esc(short)}}</td>
       <td class="num">${{r.lines.toLocaleString()}}</td>
       <td class="num">${{r.latency_ms}} ms</td>
       <td class="num">${{r.input_tokens.toLocaleString()}}</td>
       <td class="num">${{r.output_tokens.toLocaleString()}}</td>
       <td class="cost-cell">${{fmtCost(r.cost_usd)}}</td>
-      <td><span class="tag">${{r.mode}}</span></td>
-      <td><span class="tag">${{r.model}}</span></td>`;
+      <td><span class="tag">${{esc(r.mode)}}</span></td>
+      <td><span class="tag">${{esc(r.model)}}</span></td>`;
     tbody.appendChild(tr);
   }});
 }} else {{
@@ -529,9 +534,10 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def render_html(stats: dict[str, Any]) -> str:
+    import html as _html
     return _HTML.format(
         stats_json=json.dumps(stats),
         recent_json=json.dumps(stats["recent"]),
         daily_json=json.dumps(stats["delegations_by_day"]),
-        model=config.WORKER_MODEL,
+        model=_html.escape(config.WORKER_MODEL or "(not set)"),
     )
