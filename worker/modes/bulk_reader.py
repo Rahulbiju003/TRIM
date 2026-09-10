@@ -1,6 +1,7 @@
 """BulkReaderMode — summarise a large file using the cheap worker LLM."""
 from __future__ import annotations
 
+import html
 import time
 from dataclasses import dataclass
 
@@ -116,10 +117,15 @@ class BulkReaderMode:
 
     @staticmethod
     def _build_user_message(file_path: str, content: str, question: str) -> str:
-        # Wrap in XML tags so the model can cleanly delimit content
+        # Escape file_path into the XML attribute (prevents attribute injection via
+        # paths like: /foo" injected="true).
+        # Escape question content (prevents tag injection via </question> in input).
+        # File content is left unescaped — the model needs raw source text.
+        safe_path = html.escape(file_path, quote=True)
+        safe_question = html.escape(question)
         return (
-            f"<file path=\"{file_path}\">\n"
+            f'<file path="{safe_path}">\n'
             f"{content}\n"
             f"</file>\n\n"
-            f"<question>{question}</question>"
+            f"<question>{safe_question}</question>"
         )

@@ -138,16 +138,26 @@ class TestErrorResponseSafety:
         monkeypatch.setenv("OPENAI_API_KEY", fake_key)
 
         with patch.object(server_module, "_reader") as mock_reader:
-            # Simulate LiteLLM error that embeds the API key in message
+            # Simulate LiteLLM error that embeds the API key in the message
             mock_reader.run_from_content.side_effect = RuntimeError(
                 f"Authentication failed with key {fake_key}"
             )
             resp = client.post("/bulk-read", json={"file_path": "/x.py", "content": "code"})
 
-        # The key itself may appear in the detail, but this test documents
-        # current behaviour and should be updated if error sanitization is added.
-        # What MUST NOT happen is a 200 response with the key embedded.
-        assert resp.status_code in (500, 422)
+        assert resp.status_code == 500
+        # The raw exception message (containing the key) must NOT appear in the response
+        assert fake_key not in resp.text
+        assert "supersecret" not in resp.text
+
+    def test_500_detail_is_generic(self, client):
+        """500 responses use a generic message, not the raw exception."""
+        with patch.object(server_module, "_reader") as mock_reader:
+            mock_reader.run_from_content.side_effect = RuntimeError("internal boom")
+            resp = client.post("/bulk-read", json={"file_path": "/x.py", "content": "code"})
+
+        assert resp.status_code == 500
+        assert "internal boom" not in resp.text
+        assert "Worker error" in resp.text
 
     def test_401_response_body_minimal(self, auth_client):
         resp = auth_client.post(

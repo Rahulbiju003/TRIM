@@ -89,7 +89,8 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
             mode="http",
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        # Do not expose exc details — LiteLLM errors embed API keys in the message.
+        raise HTTPException(status_code=500, detail="Worker error — see server logs") from exc
 
     return BulkReadResponse(
         summary=result.summary,
