@@ -51,6 +51,12 @@ WORKER_PORT: int = _int("WORKER_PORT", 8080)
 # Leave unset for local/trusted use (no auth check).
 TRIM_API_KEY: str = os.environ.get("TRIM_API_KEY", "")
 
+# ── Rate limiting (HTTP mode only) ────────────────────────────────────────────
+# Requests per minute cap for /bulk-read across the whole server.
+# 0 = disabled (default). Set for shared/team deployments to prevent runaway usage.
+# The hook fails-open on 429, so Claude reads the file normally — no disruption.
+SHUNT_RATE_LIMIT_RPM: int = _int("SHUNT_RATE_LIMIT_RPM", 0)
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 SHUNT_METRICS_FILE: str = os.environ.get(
     "SHUNT_METRICS_FILE", "/tmp/trim-metrics.jsonl"

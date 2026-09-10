@@ -240,6 +240,7 @@ All configuration lives in `.env`. Copy `.env.example` to get started.
 | `WORKER_PORT` | `8080` | HTTP server port |
 | `SHUNT_METRICS_FILE` | `/tmp/trim-metrics.jsonl` | Delegation log path |
 | `TRIM_API_KEY` | _(unset)_ | Optional shared secret for the `/bulk-read` endpoint |
+| `SHUNT_RATE_LIMIT_RPM` | `0` (off) | Max `/bulk-read` requests per minute, server-wide. Hook fails-open on 429 — Claude reads normally if limit is hit. |
 
 ---
 

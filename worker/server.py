@@ -11,10 +11,18 @@ Auth (optional):
     X-TRIM-Key: <key>
   Applies to /bulk-read only. /health, /dashboard and /api/metrics are open.
   Leave TRIM_API_KEY unset to disable auth (local/trusted use).
+
+Rate limiting (optional):
+  Set SHUNT_RATE_LIMIT_RPM to a positive integer to cap /bulk-read requests
+  per minute across the whole server (not per-IP). 0 = disabled (default).
+  The hook fails-open on 429, so Claude reads the file normally on limit hit.
 """
 from __future__ import annotations
 
+import collections
 import secrets
+import threading
+import time
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -33,6 +41,35 @@ _reader = BulkReaderMode(backend=_backend)
 
 # Max content size: slightly above SHUNT_MAX_BYTES to match hook-side guard
 _MAX_CONTENT_BYTES = config.SHUNT_MAX_BYTES + 4096
+
+
+class _SlidingWindowRateLimiter:
+    """Thread-safe sliding-window rate limiter (server-wide, not per-IP).
+
+    Disabled when rpm == 0.  The hook fails-open on 429, so hitting the limit
+    causes Claude to read the file normally — no disruption to the developer.
+    """
+
+    def __init__(self, rpm: int) -> None:
+        self._rpm = rpm
+        self._window: collections.deque[float] = collections.deque()
+        self._lock = threading.Lock()
+
+    def is_allowed(self) -> bool:
+        if self._rpm <= 0:
+            return True
+        now = time.monotonic()
+        cutoff = now - 60.0
+        with self._lock:
+            while self._window and self._window[0] < cutoff:
+                self._window.popleft()
+            if len(self._window) >= self._rpm:
+                return False
+            self._window.append(now)
+            return True
+
+
+_rate_limiter = _SlidingWindowRateLimiter(config.SHUNT_RATE_LIMIT_RPM)
 
 
 def _check_auth(request: Request) -> None:
@@ -81,6 +118,8 @@ def api_metrics() -> JSONResponse:
 @app.post("/bulk-read", response_model=BulkReadResponse)
 def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
     _check_auth(request)
+    if not _rate_limiter.is_allowed():
+        raise HTTPException(status_code=429, detail="Rate limit exceeded — try again shortly")
     try:
         result = _reader.run_from_content(
             file_path=req.file_path,
