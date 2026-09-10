@@ -143,7 +143,13 @@ h1{{font-size:18px;color:var(--text-bright);letter-spacing:-.01em;font-weight:60
   letter-spacing:.1em
 }}
 /* ── chart ── */
-canvas{{max-height:200px}}
+.bar-chart{{display:flex;align-items:flex-end;gap:3px;height:180px;padding:8px 0 0}}
+.bar-col{{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}}
+.bar{{
+  width:100%;background:rgba(77,157,224,.35);border:1px solid #4d9de0;
+  border-radius:3px 3px 0 0;min-height:3px;box-sizing:border-box;
+}}
+.bar-label{{color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}}
 /* ── model breakdown ── */
 .model-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}}
 .model-card{{
@@ -235,7 +241,7 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   <div class="section-header">
     <span class="section-title">Delegations by Day</span>
   </div>
-  <canvas id="chart"></canvas>
+  <div id="chart" class="bar-chart"></div>
   <p id="chart-empty" class="empty" style="display:none">No data yet — read a file with &gt;350 lines to see activity</p>
 </div>
 
@@ -267,7 +273,6 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   <span id="countdown"></span>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script>
 const S = {stats_json};
 const RECENT = {recent_json};
@@ -313,30 +318,25 @@ document.getElementById("v-cost-sub").textContent = knownCost;
 document.getElementById("v-latency").textContent =
   S.avg_latency_ms ? Math.round(S.avg_latency_ms) + " ms" : "—";
 
-// ── bar chart ────────────────────────────────────────────────────────────────
+// ── bar chart (pure CSS/DOM — no external dependencies) ──────────────────────
 const chartDays = Object.keys(DAILY);
 if (chartDays.length) {{
-  new Chart(document.getElementById("chart"), {{
-    type: "bar",
-    data: {{
-      labels: chartDays,
-      datasets: [{{
-        data: Object.values(DAILY),
-        backgroundColor: "rgba(77,157,224,.18)",
-        borderColor: "#4d9de0",
-        borderWidth: 1,
-        borderRadius: 3,
-      }}]
-    }},
-    options: {{
-      responsive: true,
-      plugins: {{ legend: {{ display: false }} }},
-      scales: {{
-        x: {{ ticks: {{ color: "#5a7a9a" }}, grid: {{ color: "#111620" }} }},
-        y: {{ ticks: {{ color: "#5a7a9a", precision: 0 }},
-              grid: {{ color: "#111620" }}, beginAtZero: true }}
-      }}
-    }}
+  const container = document.getElementById("chart");
+  const vals = Object.values(DAILY);
+  const maxVal = Math.max(...vals, 1);
+  chartDays.forEach((day, i) => {{
+    const col = document.createElement("div");
+    col.className = "bar-col";
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.height = Math.max(Math.round((vals[i] / maxVal) * 160), 3) + "px";
+    bar.title = day + ": " + vals[i];
+    const label = document.createElement("div");
+    label.className = "bar-label";
+    label.textContent = day.slice(5); // MM-DD
+    col.appendChild(bar);
+    col.appendChild(label);
+    container.appendChild(col);
   }});
 }} else {{
   document.getElementById("chart").style.display = "none";
