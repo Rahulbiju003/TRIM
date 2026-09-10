@@ -1,7 +1,9 @@
 # TRIM
-**Token Routing Intelligence Middleware**
 
-TRIM is a harness for Claude Code that intercepts expensive file reads and routes them to a cheaper LLM, returning a compact summary instead of loading the full file into context. It sits between Claude and your codebase as a transparent proxy — Claude never knows the difference, but your token bill does.
+## Token Routing Intelligence Middleware
+
+**TRIM** is a harness for Claude Code that intercepts expensive file reads and routes them to a cheaper LLM, returning a compact summary instead of loading the full file into context. It sits between Claude and your codebase as a transparent proxy Claude never knows the difference, but your token bill does.
+
 ---
 
 ## How it works
