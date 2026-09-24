@@ -18,6 +18,8 @@ def log(
     output_tokens: int,
     mode: str,  # "subprocess" | "http"
     model: str,
+    cache_hit: bool = False,
+    delta: bool = False,
 ) -> None:
     """Append one metrics record to the JSONL file. Never raises."""
     try:
@@ -30,6 +32,8 @@ def log(
             "output_tokens": output_tokens,
             "mode": mode,
             "model": model,
+            "cache_hit": cache_hit,
+            "delta": delta,
         }
         path = Path(config.SHUNT_METRICS_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)

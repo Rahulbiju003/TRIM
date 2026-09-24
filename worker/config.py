@@ -73,6 +73,17 @@ SHUNT_METRICS_FILE: str = os.environ.get(
     "SHUNT_METRICS_FILE", "/tmp/trim-metrics.jsonl"
 )
 
+# ── Diff-aware summarization (optional) ───────────────────────────────────────
+# Set TRIM_CACHE_FILE to enable caching + delta summarization.
+# Leave unset to disable (TRIM behaves as before — full summarization every read).
+TRIM_CACHE_FILE: str = os.environ.get("TRIM_CACHE_FILE", "")
+# Fraction of file lines that must change before falling back to full re-summarization.
+# 0.4 = if more than 40% of the file changed, skip the delta path.
+TRIM_DELTA_THRESHOLD: float = _float("TRIM_DELTA_THRESHOLD", 0.4)
+# Max number of delta updates before forcing a full re-summarization.
+# Prevents compounding inaccuracy from repeated patches on the same summary.
+TRIM_MAX_DELTA_COUNT: int = _int("TRIM_MAX_DELTA_COUNT", 5)
+
 
 # ── Startup validation ────────────────────────────────────────────────────────
 

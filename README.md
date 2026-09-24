@@ -86,6 +86,9 @@ For production deployments, do not store API keys in `.env` files on shared infr
 | `SHUNT_METRICS_FILE` | `/tmp/trim-metrics.jsonl` | Delegation log path |
 | `TRIM_API_KEY` | _(unset)_ | Shared secret for `/bulk-read`. Required in multi-user deployments |
 | `SHUNT_RATE_LIMIT_RPM` | `0` (off) | Server-wide request cap per minute. Hook fails-open on 429 |
+| `TRIM_CACHE_FILE` | _(unset)_ | Path to the persistent summary cache (e.g. `/tmp/trim-cache.json`). Unset = disabled |
+| `TRIM_DELTA_THRESHOLD` | `0.4` | Max fraction of changed lines before falling back to full re-summarization |
+| `TRIM_MAX_DELTA_COUNT` | `5` | Max incremental delta updates before forcing a full re-summarization |
 
 ---
 
@@ -122,7 +125,32 @@ Every delegation appends one JSON record to `SHUNT_METRICS_FILE`:
 ```json
 {"ts": 1234567890.1, "file": "/src/Service.java", "lines": 420,
  "latency_ms": 1823.4, "input_tokens": 3100, "output_tokens": 180,
- "mode": "http", "model": "gemini/gemini-2.5-flash"}
+ "mode": "http", "model": "gemini/gemini-2.5-flash",
+ "cache_hit": false, "delta": false}
+```
+
+Cache hits log `latency_ms: 0`, `input_tokens: 0`, `output_tokens: 0`, and `cache_hit: true`.
+Delta updates log `delta: true` with the (much lower) token counts for the diff-only call.
+
+---
+
+## Diff-aware summarization
+
+When `TRIM_CACHE_FILE` is set, TRIM caches file summaries and uses a three-path strategy on each read:
+
+| Path | When | LLM cost |
+|------|------|----------|
+| **Cache hit** | File unchanged since last read (git blob hash match) | Zero — no LLM call |
+| **Delta update** | File changed by ≤ `TRIM_DELTA_THRESHOLD` (40%) and `delta_count` < `TRIM_MAX_DELTA_COUNT` (5) | Low — diff + previous summary only |
+| **Full summarization** | Cache miss, or file changed significantly, or delta limit reached | Normal |
+
+**Cache invalidation** uses the git blob hash (exact, content-addressed) with `mtime+size` as a fallback for untracked files. The cache is a single JSON file with `fcntl` locking for safe parallel access across concurrent hook processes. Entries expire after 7 days; LRU eviction keeps the file under 500 entries.
+
+Enable with a single env var — no other changes needed:
+
+```bash
+# In .env or your shell profile
+TRIM_CACHE_FILE=/tmp/trim-cache.json
 ```
 
 ---

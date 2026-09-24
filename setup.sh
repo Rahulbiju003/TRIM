@@ -357,6 +357,14 @@ if [[ "$MODE" == "http" ]]; then
     echo ""
     echo "Make sure the TRIM container is running:"
     echo "  cd $TRIM_DIR && podman-compose up -d"
+    echo ""
+    echo "Optional — diff-aware caching (set in TRIM server .env):"
+    echo "  TRIM_CACHE_FILE=/tmp/trim-cache.json"
+else
+    echo ""
+    echo "Optional — diff-aware caching (add to $TARGET/.env or your shell):"
+    echo "  TRIM_CACHE_FILE=/tmp/trim-cache.json"
+    echo "  When set, repeated reads of the same file skip the worker entirely."
 fi
 echo ""
 echo "Open Claude Code in $TARGET — large file reads are now routed through TRIM."

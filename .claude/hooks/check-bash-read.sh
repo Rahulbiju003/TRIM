@@ -80,12 +80,27 @@ BYTE_COUNT="$(wc -c < "$FILE_PATH" 2>/dev/null | tr -d ' ')" || exit 0
 if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
 if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
 
-# ── delegate to worker ────────────────────────────────────────────────────────
-WORKER_URL="${WORKER_URL:-}"
-TRIM_API_KEY="${TRIM_API_KEY:-}"
+SUMMARY=""
 
-if [[ -n "$WORKER_URL" ]]; then
-    PAYLOAD="$("$PYTHON" -c "
+# ── cache fast-path (optional — disabled when TRIM_CACHE_FILE is unset) ───────
+if [[ -n "${TRIM_CACHE_FILE:-}" ]]; then
+    CACHED_SUMMARY="$("$PYTHON" -c '
+import sys
+from worker import cache
+entry = cache.get(sys.argv[1])
+if entry:
+    sys.stdout.write(entry.summary)
+' "$FILE_PATH" 2>/dev/null)" || true
+    [[ -n "$CACHED_SUMMARY" ]] && SUMMARY="$CACHED_SUMMARY"
+fi
+
+# ── delegate to worker (skipped on cache hit) ─────────────────────────────────
+if [[ -z "$SUMMARY" ]]; then
+    WORKER_URL="${WORKER_URL:-}"
+    TRIM_API_KEY="${TRIM_API_KEY:-}"
+
+    if [[ -n "$WORKER_URL" ]]; then
+        PAYLOAD="$("$PYTHON" -c "
 import json, sys
 fp = sys.argv[1]
 with open(fp, encoding='utf-8', errors='replace') as f:
@@ -93,25 +108,26 @@ with open(fp, encoding='utf-8', errors='replace') as f:
 print(json.dumps({'file_path': fp, 'content': content}))
 " "$FILE_PATH")" || exit 0
 
-    AUTH_HEADER=""
-    [[ -n "$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
+        AUTH_HEADER=""
+        [[ -n "$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
 
-    # SC2086: intentional word-split so -H and the value become two args for curl
-    # shellcheck disable=SC2086
-    RESPONSE="$(printf '%s\n' "$PAYLOAD" | curl -sf \
-        -X POST "${WORKER_URL}/bulk-read" \
-        -H 'Content-Type: application/json' \
-        --data-binary @- \
-        ${AUTH_HEADER:+$AUTH_HEADER} \
-        --max-time "${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
+        # SC2086: intentional word-split so -H and the value become two args for curl
+        # shellcheck disable=SC2086
+        RESPONSE="$(printf '%s\n' "$PAYLOAD" | curl -sf \
+            -X POST "${WORKER_URL}/bulk-read" \
+            -H 'Content-Type: application/json' \
+            --data-binary @- \
+            ${AUTH_HEADER:+$AUTH_HEADER} \
+            --max-time "${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
-    SUMMARY="$("$PYTHON" -c "
+        SUMMARY="$("$PYTHON" -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 print(d.get('summary', ''))
 " <<< "$RESPONSE")" || exit 0
-else
-    SUMMARY="$("$PYTHON" -m worker bulk-read --file "$FILE_PATH" 2>/dev/null)" || exit 0
+    else
+        SUMMARY="$("$PYTHON" -m worker bulk-read --file "$FILE_PATH" 2>/dev/null)" || exit 0
+    fi
 fi
 
 [[ -z "$SUMMARY" ]] && exit 0
