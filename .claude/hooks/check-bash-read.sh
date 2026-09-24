@@ -57,6 +57,15 @@ PYEOF
 
 [[ -z "$FILE_PATH" || ! -f "$FILE_PATH" ]] && exit 0
 
+# ── binary file pass-through ──────────────────────────────────────────────────
+case "${FILE_PATH##*.}" in
+    pdf|png|jpg|jpeg|gif|bmp|ico|webp|\
+    zip|tar|gz|bz2|xz|7z|rar|\
+    whl|pyc|pyo|so|dylib|dll|exe|\
+    mp3|mp4|wav|mov|avi|mkv|\
+    db|sqlite|sqlite3) exit 0 ;;
+esac
+
 # ── routing checks ────────────────────────────────────────────────────────────
 MIN_LINES="${SHUNT_MIN_LINES:-350}"
 MAX_BYTES="${SHUNT_MAX_BYTES:-400000}"

@@ -111,6 +111,14 @@ LIMIT="\$(echo "\$HOOK_JSON"    | python3 -c "import json,sys; d=json.load(sys.s
 [[ -z "\$FILE_PATH" || ! -f "\$FILE_PATH" ]] && exit 0
 [[ -n "\$OFFSET" || -n "\$LIMIT" ]] && exit 0
 
+case "\${FILE_PATH##*.}" in
+    pdf|png|jpg|jpeg|gif|bmp|ico|webp|\
+    zip|tar|gz|bz2|xz|7z|rar|\
+    whl|pyc|pyo|so|dylib|dll|exe|\
+    mp3|mp4|wav|mov|avi|mkv|\
+    db|sqlite|sqlite3) exit 0 ;;
+esac
+
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 # wc -l counts newlines; files without a trailing newline lose one count
 if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != \$'\n' ]]; then
@@ -188,6 +196,14 @@ PYEOF
 )" || exit 0
 
 [[ -z "\$FILE_PATH" || ! -f "\$FILE_PATH" ]] && exit 0
+
+case "\${FILE_PATH##*.}" in
+    pdf|png|jpg|jpeg|gif|bmp|ico|webp|\
+    zip|tar|gz|bz2|xz|7z|rar|\
+    whl|pyc|pyo|so|dylib|dll|exe|\
+    mp3|mp4|wav|mov|avi|mkv|\
+    db|sqlite|sqlite3) exit 0 ;;
+esac
 
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 # wc -l counts newlines; files without a trailing newline lose one count

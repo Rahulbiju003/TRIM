@@ -96,6 +96,7 @@ For production deployments, do not store API keys in `.env` files on shared infr
 | `Read file.java` | ≥ 350 lines | Delegated — summary injected |
 | `Read file.java` with `offset` / `limit` | Any size | Pass through (intentional partial read) |
 | `Read small.py` | < 350 lines | Pass through |
+| `Read file.pdf` / `Read image.png` | Any size | Pass through (binary format) |
 | `Bash: cat large.py` | ≥ 350 lines, no pipe | Delegated — summary injected |
 | `Bash: cat file \| grep foo` | Piped command | Pass through |
 | `Bash: cat *.log` | Glob pattern | Pass through |
@@ -161,6 +162,7 @@ TRIM/
 ## Caveats
 
 - **Summaries are lossy.** TRIM trades full fidelity for token efficiency. When Claude needs exact line numbers or a precise code snippet, it reads the file in sections using `offset`/`limit` — those partial reads pass through normally.
+- **Binary files pass through.** PDFs, images, archives, compiled files, and media files are never intercepted — they cannot be meaningfully summarised as text.
 - **Works with Claude Code only.** TRIM uses PreToolUse hooks, a Claude Code feature. It does not intercept API calls or other clients.
 - **Line threshold is configurable.** Adjust `SHUNT_MIN_LINES` in `.env` to tune the routing threshold for your codebase.
 
