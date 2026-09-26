@@ -34,12 +34,14 @@ from pydantic import BaseModel, Field
 from worker import binary, config, dashboard, routing
 from worker.backends.litellm_backend import LiteLLMBackend
 from worker.modes.bulk_reader import BulkReaderMode, SYSTEM_PROMPT
+from worker.web_reader import WebReaderMode
 
 app = FastAPI(title="trim-worker", version="0.1.0")
 
 # Shared backend (one per process)
 _backend = LiteLLMBackend()
 _reader = BulkReaderMode(backend=_backend)
+_web_reader = WebReaderMode(backend=_backend)
 
 # Max content size: slightly above compute_max_bytes to match hook-side guard.
 # Computed once at module load time from the primary text model.
@@ -247,6 +249,96 @@ def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
         model=completion.model,
         pass_through=False,
     )
+
+
+class WebReadRequest(BaseModel):
+    url: str = Field(..., max_length=2048)
+    content: str | None = Field(default=None)          # text content (HTML, JSON, etc.)
+    content_b64: str | None = Field(default=None)      # base64 for binary (PDF from URL)
+    is_binary: bool = Field(default=False)
+    prompt: str | None = Field(default=None, max_length=4096)
+
+
+class WebReadResponse(BaseModel):
+    summary: str
+    url: str
+    input_tokens: int
+    output_tokens: int
+    latency_ms: float
+    model: str
+    pass_through: bool = False
+
+
+@app.post("/web-read", response_model=WebReadResponse)
+def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
+    _check_auth(request)
+    if not _rate_limiter.is_allowed():
+        raise HTTPException(status_code=429, detail="Rate limit exceeded — try again shortly")
+
+    try:
+        if req.is_binary and req.content_b64:
+            # Binary URL content — reuse binary pipeline (e.g. PDF fetched from a URL)
+            raw_bytes = base64.b64decode(req.content_b64)
+            pdf_model = routing.model_for_pdf()
+            vision_model = routing.model_for_vision()
+            text_content, multimodal_parts = binary.process(
+                file_path=req.url,
+                raw_bytes=raw_bytes,
+                pdf_model=pdf_model,
+                vision_model=vision_model,
+            )
+            if text_content is None and multimodal_parts is None:
+                return WebReadResponse(
+                    summary="", url=req.url, input_tokens=0, output_tokens=0,
+                    latency_ms=0.0, model=config.TRIM_ROUTE_TEXT, pass_through=True,
+                )
+            t0 = time.monotonic()
+            if multimodal_parts is not None:
+                use_model = pdf_model or config.TRIM_ROUTE_TEXT
+                completion = _backend.complete_multimodal(
+                    system=SYSTEM_PROMPT,
+                    user_parts=multimodal_parts,
+                    model=use_model,
+                )
+            else:
+                assert text_content is not None
+                web_result = _web_reader.run_from_content(
+                    url=req.url, content=text_content, prompt=req.prompt,
+                )
+                return WebReadResponse(
+                    summary=web_result.summary, url=web_result.url,
+                    input_tokens=web_result.input_tokens,
+                    output_tokens=web_result.output_tokens,
+                    latency_ms=web_result.latency_ms, model=web_result.model,
+                    pass_through=web_result.pass_through,
+                )
+            latency_ms = (time.monotonic() - t0) * 1000
+            return WebReadResponse(
+                summary=completion.content, url=req.url,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                latency_ms=latency_ms, model=completion.model,
+            )
+        else:
+            if not req.content:
+                raise HTTPException(status_code=422, detail="content is required for non-binary requests")
+            result = _web_reader.run_from_content(
+                url=req.url, content=req.content, prompt=req.prompt,
+            )
+            return WebReadResponse(
+                summary=result.summary, url=result.url,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                latency_ms=result.latency_ms, model=result.model,
+                pass_through=result.pass_through,
+            )
+
+    except HTTPException:
+        raise
+    except litellm.exceptions.RateLimitError as exc:
+        raise HTTPException(status_code=429, detail="Provider rate limit exceeded — try again shortly") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Worker error — see server logs") from exc
 
 
 def serve() -> None:
