@@ -100,7 +100,7 @@ set -euo pipefail
 TRIM_WORKER="${WORKER_URL}"
 MIN_LINES="\${SHUNT_MIN_LINES:-350}"
 MAX_BYTES="\${SHUNT_MAX_BYTES:-400000}"
-TRIM_API_KEY="\${TRIM_API_KEY:-}"
+TRIM_API_KEY="\${TRIM_API_KEY:-${TRIM_API_KEY}}"
 
 HOOK_JSON="\$(cat)"
 
@@ -177,7 +177,7 @@ set -euo pipefail
 TRIM_WORKER="${WORKER_URL}"
 MIN_LINES="\${SHUNT_MIN_LINES:-350}"
 MAX_BYTES="\${SHUNT_MAX_BYTES:-400000}"
-TRIM_API_KEY="\${TRIM_API_KEY:-}"
+TRIM_API_KEY="\${TRIM_API_KEY:-${TRIM_API_KEY}}"
 
 HOOK_JSON="\$(cat)"
 COMMAND="\$(echo "\$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))")" || exit 0
