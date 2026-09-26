@@ -152,14 +152,14 @@ print(json.dumps({'file_path': fp, 'content': content}))
 fi
 
 # Use a private temp config to keep X-TRIM-Key out of ps aux argv
-_TRIM_CFG="$(mktemp)" || exit 0
-chmod 600 "$_TRIM_CFG"
-printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
-[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
-trap 'rm -f "$_TRIM_CFG"' EXIT
+_TRIM_CFG="\$(mktemp)" || exit 0
+chmod 600 "\$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "\$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "\$_TRIM_CFG"
+trap 'rm -f "\$_TRIM_CFG"' EXIT
 
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
-    --config "$_TRIM_CFG" \
+    --config "\$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/bulk-read" \
     --data-binary @- \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
@@ -255,14 +255,14 @@ print(json.dumps({'file_path': fp, 'content': content}))
 fi
 
 # Use a private temp config to keep X-TRIM-Key out of ps aux argv
-_TRIM_CFG="$(mktemp)" || exit 0
-chmod 600 "$_TRIM_CFG"
-printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
-[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
-trap 'rm -f "$_TRIM_CFG"' EXIT
+_TRIM_CFG="\$(mktemp)" || exit 0
+chmod 600 "\$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "\$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "\$_TRIM_CFG"
+trap 'rm -f "\$_TRIM_CFG"' EXIT
 
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
-    --config "$_TRIM_CFG" \
+    --config "\$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/bulk-read" \
     --data-binary @- \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
@@ -289,8 +289,6 @@ print(json.dumps({
 " "\$SUMMARY"
 HOOK
 
-else
-    # ── Subprocess mode
     cat > "$HOOKS_DIR/trim-check-webfetch.sh" << HOOK
 #!/usr/bin/env bash
 # TRIM — PreToolUse hook for WebFetch tool (HTTP mode)
@@ -384,14 +382,14 @@ fi
 rm -f "\$TMPFILE"
 
 # Use a private temp config to keep X-TRIM-Key out of ps aux argv
-_TRIM_CFG="$(mktemp)" || exit 0
-chmod 600 "$_TRIM_CFG"
-printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
-[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
-trap 'rm -f "$_TRIM_CFG"' EXIT
+_TRIM_CFG="\$(mktemp)" || exit 0
+chmod 600 "\$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "\$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "\$_TRIM_CFG"
+trap 'rm -f "\$_TRIM_CFG"' EXIT
 
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
-    --config "$_TRIM_CFG" \
+    --config "\$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/web-read" \
     --data-binary @- \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
@@ -416,6 +414,14 @@ print(json.dumps({
 }))
 " "\$SUMMARY"
 HOOK
+
+else
+    # ── Subprocess mode
+    cat > "$HOOKS_DIR/trim-check-webfetch.sh" << 'STUB'
+#!/usr/bin/env bash
+# TRIM — WebFetch hook stub (subprocess mode — web summarization not available)
+exit 0
+STUB
 
 : copy TRIM hooks, hardcode PROJECT_ROOT path ──────────
     PYTHON="$TRIM_DIR/.venv/bin/python"
