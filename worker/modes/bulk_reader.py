@@ -123,7 +123,7 @@ class BulkReaderMode:
         question = question or DEFAULT_QUESTION
 
         # ── cache check ───────────────────────────────────────────────────────
-        entry = cache.get(file_path)
+        entry = cache.get(file_path, content)
         if entry is not None:
             metrics.log(
                 file_path=file_path, line_count=line_count, latency_ms=0.0,
@@ -138,7 +138,7 @@ class BulkReaderMode:
             )
 
         # ── delta check ───────────────────────────────────────────────────────
-        stale = cache.get_stale(file_path)
+        stale = cache.get_stale(file_path, content)
         diff_result = differ.compute(file_path, content, stale.content) if stale else None
         use_delta = (
             stale is not None

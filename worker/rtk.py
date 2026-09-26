@@ -8,8 +8,10 @@ If RTK is not installed, this module is a no-op — TRIM behaves as before.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 
 
@@ -39,16 +41,34 @@ def compress(file_path: str, original_content: str) -> RTKResult | None:
 
     Returns RTKResult on success, None if RTK is unavailable or errors.
     Never raises — always fails gracefully so caller falls through to LLM path.
+
+    In HTTP server mode the original file_path may not exist on this machine.
+    We write content to a temp file with the correct extension so RTK can
+    detect the language and apply the right heuristics.
     """
     if _RTK_PATH is None:
         return None
     try:
-        proc = subprocess.run(
-            [_RTK_PATH, "read", "--filter=aggressive", file_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        ext = os.path.splitext(file_path)[1] or ".txt"
+        target = file_path if os.path.exists(file_path) else None
+        tmp = None
+        if target is None:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=ext, delete=False, encoding="utf-8"
+            )
+            tmp.write(original_content)
+            tmp.close()
+            target = tmp.name
+        try:
+            proc = subprocess.run(
+                [_RTK_PATH, "read", "--level=aggressive", target],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        finally:
+            if tmp is not None:
+                os.unlink(tmp.name)
         if proc.returncode != 0 or not proc.stdout.strip():
             return None
         compressed = proc.stdout

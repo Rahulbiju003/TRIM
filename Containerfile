@@ -1,15 +1,12 @@
 # ── TRIM worker — Podman / Docker compatible ──────────────────────────────────
 # Runs the FastAPI HTTP worker.  All configuration via env vars.
-#
-# Build:
-#   podman build -t trim-worker -f Containerfile .
-#
-# Run:
-#   podman run --rm -p 8080:8080 \
-#     -e OPENROUTER_API_KEY=sk-or-... \
-#     -e WORKER_MODEL=openrouter/google/gemma-3n-e4b-it:free \
-#     trim-worker
 
+# ── Stage 1: build RTK binary ─────────────────────────────────────────────────
+FROM rust:slim AS rtk-builder
+RUN cargo install brokk-rtk --locked 2>/dev/null || cargo install brokk-rtk
+RUN cp $(which rtk) /usr/local/bin/rtk-bin
+
+# ── Stage 2: TRIM worker ──────────────────────────────────────────────────────
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="trim-worker"
@@ -17,6 +14,10 @@ LABEL org.opencontainers.image.description="TRIM — Token Routing Intelligence 
 
 # Non-root user for security
 RUN useradd --create-home --shell /bin/bash trim
+
+# Copy RTK binary from builder stage
+COPY --from=rtk-builder /usr/local/bin/rtk-bin /usr/local/bin/rtk
+RUN chmod +x /usr/local/bin/rtk
 
 WORKDIR /app
 
@@ -32,9 +33,7 @@ RUN chown trim:trim /tmp
 
 USER trim
 
-# Health check — port hardcoded to 8080 (shell variable expansion is build-time only).
-# Override WORKER_PORT in compose.yaml if you need a different port,
-# and rebuild the image to update the healthcheck accordingly.
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
 

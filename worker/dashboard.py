@@ -184,6 +184,25 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   border-radius:3px;padding:1px 6px;font-size:10px;color:var(--muted)
 }}
 .empty{{color:var(--muted);text-align:center;padding:32px}}
+/* ── chart toggle ── */
+.chart-toggle{{display:flex;gap:8px;align-items:center}}
+.toggle-btn{{
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+  padding:3px 10px;font-size:10px;color:var(--muted);cursor:pointer;
+  font-family:var(--font);transition:all .15s;
+}}
+.toggle-btn.active{{
+  background:var(--accent-dim);border-color:var(--accent);color:var(--accent);
+}}
+.toggle-btn:hover:not(.active){{color:var(--text);border-color:var(--border-bright)}}
+/* ── SVG line chart ── */
+.line-chart-wrap{{width:100%;height:180px;position:relative}}
+.line-chart-wrap svg{{width:100%;height:100%}}
+.lc-line{{fill:none;stroke:var(--accent);stroke-width:2;}}
+.lc-area{{fill:url(#lcGrad);}}
+.lc-dot{{fill:var(--accent);}}
+.lc-axis{{stroke:var(--border);stroke-width:1;}}
+.lc-label{{fill:var(--muted);font-size:9px;font-family:var(--font);}}
 /* ── breakdown pills ── */
 .pill-row{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}}
 .pill{{
@@ -275,9 +294,14 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
 
 <div class="section">
   <div class="section-header">
-    <span class="section-title">Delegations by Day</span>
+    <span class="section-title">Token Usage</span>
+    <div class="chart-toggle">
+      <button class="toggle-btn active" id="btn-continuous" onclick="showChart('continuous')">Continuous</button>
+      <button class="toggle-btn" id="btn-daily" onclick="showChart('daily')">Daily</button>
+    </div>
   </div>
-  <div id="chart" class="bar-chart"></div>
+  <div id="chart-continuous" class="line-chart-wrap"></div>
+  <div id="chart-daily" class="bar-chart" style="display:none"></div>
   <p id="chart-empty" class="empty" style="display:none">No data yet — read a file with &gt;350 lines to see activity</p>
 </div>
 
@@ -369,10 +393,103 @@ document.getElementById("v-cost-sub").textContent = knownCost;
 document.getElementById("v-latency").textContent =
   S.avg_latency_ms ? Math.round(S.avg_latency_ms) + " ms" : "—";
 
-// ── bar chart (pure CSS/DOM — no external dependencies) ──────────────────────
+// ── chart toggle ─────────────────────────────────────────────────────────────
+function showChart(type) {{
+  document.getElementById("chart-continuous").style.display = type === "continuous" ? "" : "none";
+  document.getElementById("chart-daily").style.display = type === "daily" ? "flex" : "none";
+  document.getElementById("btn-continuous").classList.toggle("active", type === "continuous");
+  document.getElementById("btn-daily").classList.toggle("active", type === "daily");
+}}
+
+// ── continuous line chart (SVG) ───────────────────────────────────────────────
+const CONTINUOUS = {continuous_json};
+(function() {{
+  const wrap = document.getElementById("chart-continuous");
+  if (!CONTINUOUS.length) {{
+    wrap.style.display = "none";
+    document.getElementById("chart-empty").style.display = "block";
+    return;
+  }}
+  const W = 800, H = 160, PL = 48, PR = 12, PT = 10, PB = 24;
+  const cw = W - PL - PR, ch = H - PT - PB;
+  const pts = CONTINUOUS;
+  const minT = pts[0].ts, maxT = pts[pts.length-1].ts || minT + 1;
+  const maxTok = Math.max(...pts.map(p => p.tokens), 1);
+  const x = t => PL + (maxT === minT ? cw/2 : ((t - minT) / (maxT - minT)) * cw);
+  const y = v => PT + ch - (v / maxTok) * ch;
+
+  // Build cumulative token line
+  let cum = 0;
+  const cumPts = pts.map(p => {{ cum += p.tokens; return {{ts: p.ts, v: cum}}; }});
+  const maxCum = cum || 1;
+  const yc = v => PT + ch - (v / maxCum) * ch;
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${{W}} ${{H}}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  // Gradient
+  const defs = document.createElementNS(svgNS, "defs");
+  defs.innerHTML = `<linearGradient id="lcGrad" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#4d9de0" stop-opacity="0.25"/>
+    <stop offset="100%" stop-color="#4d9de0" stop-opacity="0"/>
+  </linearGradient>`;
+  svg.appendChild(defs);
+
+  // Area + line for cumulative tokens
+  const areaD = `M${{x(cumPts[0].ts)}},${{PT+ch}} ` +
+    cumPts.map(p => `L${{x(p.ts)}},${{yc(p.v)}}`).join(" ") +
+    ` L${{x(cumPts[cumPts.length-1].ts)}},${{PT+ch}} Z`;
+  const area = document.createElementNS(svgNS, "path");
+  area.setAttribute("class","lc-area"); area.setAttribute("d", areaD);
+  svg.appendChild(area);
+
+  const lineD = cumPts.map((p,i) => `${{i===0?"M":"L"}}${{x(p.ts)}},${{yc(p.v)}}`).join(" ");
+  const line = document.createElementNS(svgNS, "path");
+  line.setAttribute("class","lc-line"); line.setAttribute("d", lineD);
+  svg.appendChild(line);
+
+  // Per-request dots
+  pts.forEach(p => {{
+    if (!p.tokens) return;
+    const dot = document.createElementNS(svgNS, "circle");
+    dot.setAttribute("cx", x(p.ts)); dot.setAttribute("cy", y(p.tokens));
+    dot.setAttribute("r", "3"); dot.setAttribute("class","lc-dot");
+    dot.setAttribute("opacity","0.6");
+    dot.innerHTML = `<title>${{new Date(p.ts).toLocaleTimeString()}}: ${{p.tokens}} tokens</title>`;
+    svg.appendChild(dot);
+  }});
+
+  // Axes
+  const axisX = document.createElementNS(svgNS, "line");
+  axisX.setAttribute("x1",PL); axisX.setAttribute("y1",PT+ch);
+  axisX.setAttribute("x2",W-PR); axisX.setAttribute("y2",PT+ch);
+  axisX.setAttribute("class","lc-axis"); svg.appendChild(axisX);
+
+  // Y-axis label
+  const yLbl = document.createElementNS(svgNS, "text");
+  yLbl.setAttribute("class","lc-label"); yLbl.setAttribute("x","4"); yLbl.setAttribute("y",PT+8);
+  yLbl.textContent = fmtTok(maxCum) + " cumulative"; svg.appendChild(yLbl);
+
+  // X-axis time labels
+  [0, 0.5, 1].forEach(frac => {{
+    const ts = minT + frac * (maxT - minT);
+    const lbl = document.createElementNS(svgNS, "text");
+    lbl.setAttribute("class","lc-label");
+    lbl.setAttribute("x", x(ts)); lbl.setAttribute("y", H-4);
+    lbl.setAttribute("text-anchor", frac===0?"start": frac===1?"end":"middle");
+    lbl.textContent = new Date(ts).toLocaleTimeString([], {{hour:"2-digit",minute:"2-digit"}});
+    svg.appendChild(lbl);
+  }});
+
+  wrap.appendChild(svg);
+}})();
+
+// ── daily bar chart ───────────────────────────────────────────────────────────
 const chartDays = Object.keys(DAILY);
 if (chartDays.length) {{
-  const container = document.getElementById("chart");
+  const container = document.getElementById("chart-daily");
   const vals = Object.values(DAILY);
   const maxVal = Math.max(...vals, 1);
   chartDays.forEach((day, i) => {{
@@ -384,14 +501,11 @@ if (chartDays.length) {{
     bar.title = day + ": " + vals[i];
     const label = document.createElement("div");
     label.className = "bar-label";
-    label.textContent = day.slice(5); // MM-DD
+    label.textContent = day.slice(5);
     col.appendChild(bar);
     col.appendChild(label);
     container.appendChild(col);
   }});
-}} else {{
-  document.getElementById("chart").style.display = "none";
-  document.getElementById("chart-empty").style.display = "block";
 }}
 
 // ── model cards ──────────────────────────────────────────────────────────────
@@ -677,11 +791,18 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def render_html(stats: dict[str, Any]) -> str:
+def render_html(stats: dict[str, Any], records: list[dict[str, Any]] | None = None) -> str:
     import html as _html
+    _records = records or []
+    continuous = [
+        {"ts": int(r["ts"] * 1000), "tokens": r.get("input_tokens", 0)}
+        for r in _records
+        if "ts" in r
+    ]
     return _HTML.format(
         stats_json=json.dumps(stats),
         recent_json=json.dumps(stats["recent"]),
         daily_json=json.dumps(stats["delegations_by_day"]),
+        continuous_json=json.dumps(continuous),
         model=_html.escape(config.WORKER_MODEL or "(not set)"),
     )

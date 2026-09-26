@@ -472,6 +472,61 @@ chmod +x "$HOOKS_DIR/trim-check-file-size.sh" \
          "$HOOKS_DIR/trim-check-bash-read.sh" \
          "$HOOKS_DIR/trim-check-webfetch.sh"
 
+# ── Install /trim slash command skills ────────────────────────────────────────
+mkdir -p "$TARGET/.claude/commands"
+
+cat > "$TARGET/.claude/commands/trim.md" << 'SKILLEOF'
+# TRIM Active
+
+TRIM (Token Routing Intelligence Middleware) intercepts large file reads in this project.
+Files over 350 lines are summarised by a cheap LLM before reaching you.
+You receive the result as [TRIM file summary] context -- trust it as you would the file itself.
+
+Status meanings:
+- full:  First read. RTK pre-compresses code, LLM summarises.
+- cache: Unchanged since last read. Instant, zero tokens.
+- delta: Small change. Diff sent to LLM, summary patched cheaply.
+- pass:  Binary type not supported. Claude reads normally.
+
+Server:
+  Worker:    __WORKER_URL__
+  Dashboard: __WORKER_URL__/dashboard
+
+Run /trim-status to see live metrics and cache hit rate.
+SKILLEOF
+
+cat > "$TARGET/.claude/commands/trim-status.md" << 'SKILLEOF'
+# TRIM Status
+
+Run these commands and summarise the results:
+
+1. Health check:
+   curl -s __WORKER_URL__/health
+
+2. Fetch metrics JSON:
+   curl -s __KEY_HEADER__ __WORKER_URL__/api/metrics
+
+From the JSON, report:
+- Total records count
+- cache_hit=true count and hit rate percentage
+- delta=true count and rtk_tokens_saved total
+- input_tokens total and web-read count
+- Last 3 records: file/url, route, content_type, status, input_tokens, rtk_tokens_saved
+
+Summarise: is caching working, is RTK saving tokens, what is being read most.
+SKILLEOF
+
+# Substitute placeholders with actual server values
+_TRIM_KEY_HEADER=""
+[[ -n "$TRIM_API_KEY" ]] && _TRIM_KEY_HEADER="-H X-TRIM-Key:${TRIM_API_KEY}"
+sed -i.bak \
+    -e "s|__WORKER_URL__|${WORKER_URL}|g" \
+    -e "s|__KEY_HEADER__|${_TRIM_KEY_HEADER}|g" \
+    "$TARGET/.claude/commands/trim.md" \
+    "$TARGET/.claude/commands/trim-status.md"
+rm -f "$TARGET/.claude/commands/trim.md.bak" "$TARGET/.claude/commands/trim-status.md.bak"
+
+
 # ── Patch target project's .claude/settings.json ─────────────────────────────
 python3 - "$SETTINGS" << 'PYEOF'
 import json, sys, os

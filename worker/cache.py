@@ -10,6 +10,7 @@ Concurrency:  fcntl shared/exclusive locks — safe for parallel hook processes
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
@@ -37,7 +38,7 @@ def enabled() -> bool:
     return bool(config.TRIM_CACHE_FILE)
 
 
-def get(file_path: str) -> CacheEntry | None:
+def get(file_path: str, content: str | None = None) -> CacheEntry | None:
     """Return a valid, unexpired cache entry or None.
 
     Returns None when:
@@ -58,13 +59,13 @@ def get(file_path: str) -> CacheEntry | None:
         return None
     if time.time() - entry.created_at > _TTL_SECONDS:
         return None
-    current_fp = _fingerprint(file_path)
+    current_fp = _fingerprint(file_path, content)
     if current_fp is None or current_fp != entry.fingerprint:
         return None
     return entry
 
 
-def get_stale(file_path: str) -> CacheEntry | None:
+def get_stale(file_path: str, content: str | None = None) -> CacheEntry | None:
     """Return a cache entry even if the fingerprint changed (file was modified).
 
     Used by the delta path: we need the previous summary and content even
@@ -95,7 +96,7 @@ def put(file_path: str, summary: str, delta_count: int, content: str) -> None:
     if not enabled():
         return
     try:
-        fp = _fingerprint(file_path)
+        fp = _fingerprint(file_path, content)
         if fp is None:
             return
         path = Path(config.TRIM_CACHE_FILE)
@@ -122,8 +123,12 @@ def put(file_path: str, summary: str, delta_count: int, content: str) -> None:
         pass  # cache writes must never crash the main path
 
 
-def _fingerprint(file_path: str) -> str | None:
-    """Git blob hash if tracked, else mtime-size string. None on error."""
+def _fingerprint(file_path: str, content: str | None = None) -> str | None:
+    """Git blob hash if tracked, else mtime-size string, else SHA-256 of content.
+
+    The SHA-256 fallback handles HTTP server mode where file_path is on the
+    client machine and does not exist locally on the server.
+    """
     try:
         result = subprocess.run(
             ["git", "hash-object", file_path],
@@ -139,7 +144,10 @@ def _fingerprint(file_path: str) -> str | None:
         stat = os.stat(file_path)
         return f"{stat.st_mtime:.0f}-{stat.st_size}"
     except Exception:
-        return None
+        pass
+    if content is not None:
+        return "sha256:" + hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+    return None
 
 
 # In-process cache: avoids re-parsing the JSON file on every call in HTTP server mode.

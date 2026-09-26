@@ -114,7 +114,7 @@ def health() -> dict:
 def dashboard_view() -> HTMLResponse:
     records = dashboard.read_metrics()
     stats = dashboard.compute_stats(records)
-    return HTMLResponse(content=dashboard.render_html(stats))
+    return HTMLResponse(content=dashboard.render_html(stats, records))
 
 
 @app.get("/api/metrics", include_in_schema=False)
