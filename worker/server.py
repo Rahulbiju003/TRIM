@@ -9,7 +9,7 @@ Endpoints:
 Auth (optional):
   Set TRIM_API_KEY env var on the server. Callers must then send:
     X-TRIM-Key: <key>
-  Applies to /bulk-read only. /health, /dashboard and /api/metrics are open.
+  Applies to /bulk-read, /web-read and /api/metrics. /health and /dashboard are open.
   Leave TRIM_API_KEY unset to disable auth (local/trusted use).
 
 Rate limiting (optional):
@@ -118,25 +118,26 @@ def dashboard_view() -> HTMLResponse:
 
 
 @app.get("/api/metrics", include_in_schema=False)
-def api_metrics() -> JSONResponse:
+async def api_metrics(request: Request) -> JSONResponse:
+    _check_auth(request)
     records = dashboard.read_metrics()
     return JSONResponse({"records": records, "count": len(records)})
 
 
 @app.post("/bulk-read", response_model=BulkReadResponse)
-def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
+async def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
     _check_auth(request)
     if not _rate_limiter.is_allowed():
         raise HTTPException(status_code=429, detail="Rate limit exceeded — try again shortly")
 
     try:
         if req.is_binary and req.content_b64:
-            return _handle_binary(req)
+            return await _handle_binary(req)
         else:
             # Text path — require content field
             if not req.content:
                 raise HTTPException(status_code=422, detail="content is required for non-binary requests")
-            return _handle_text(req)
+            return await _handle_text(req)
 
     except HTTPException:
         raise
@@ -151,10 +152,10 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
         raise HTTPException(status_code=500, detail="Worker error — see server logs") from exc
 
 
-def _handle_text(req: BulkReadRequest) -> BulkReadResponse:
+async def _handle_text(req: BulkReadRequest) -> BulkReadResponse:
     """Process a plain-text file request."""
     assert req.content is not None
-    result = _reader.run_from_content(
+    result = await _reader.run_from_content(
         file_path=req.file_path,
         content=req.content,
         question=req.question,
@@ -172,7 +173,7 @@ def _handle_text(req: BulkReadRequest) -> BulkReadResponse:
     )
 
 
-def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
+async def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
     """Process a binary file request using the two-tier binary pipeline."""
     assert req.content_b64 is not None
     try:
@@ -213,7 +214,7 @@ def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
             use_model = pdf_model or config.TRIM_ROUTE_TEXT
         else:
             use_model = vision_model or config.TRIM_ROUTE_TEXT
-        completion = _backend.complete_multimodal(
+        completion = await _backend.complete_multimodal(
             system=SYSTEM_PROMPT,
             user_parts=multimodal_parts,
             model=use_model,
@@ -221,7 +222,7 @@ def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
     else:
         # Tier 2: text extraction — run through the normal text summarization path
         assert text_content is not None
-        result = _reader.run_from_content(
+        result = await _reader.run_from_content(
             file_path=req.file_path,
             content=text_content,
             question=req.question,
@@ -270,7 +271,7 @@ class WebReadResponse(BaseModel):
 
 
 @app.post("/web-read", response_model=WebReadResponse)
-def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
+async def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
     _check_auth(request)
     if not _rate_limiter.is_allowed():
         raise HTTPException(status_code=429, detail="Rate limit exceeded — try again shortly")
@@ -295,14 +296,14 @@ def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
             t0 = time.monotonic()
             if multimodal_parts is not None:
                 use_model = pdf_model or config.TRIM_ROUTE_TEXT
-                completion = _backend.complete_multimodal(
+                completion = await _backend.complete_multimodal(
                     system=SYSTEM_PROMPT,
                     user_parts=multimodal_parts,
                     model=use_model,
                 )
             else:
                 assert text_content is not None
-                web_result = _web_reader.run_from_content(
+                web_result = await _web_reader.run_from_content(
                     url=req.url, content=text_content, prompt=req.prompt,
                 )
                 return WebReadResponse(
@@ -322,7 +323,7 @@ def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
         else:
             if not req.content:
                 raise HTTPException(status_code=422, detail="content is required for non-binary requests")
-            result = _web_reader.run_from_content(
+            result = await _web_reader.run_from_content(
                 url=req.url, content=req.content, prompt=req.prompt,
             )
             return WebReadResponse(

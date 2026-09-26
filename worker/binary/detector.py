@@ -20,7 +20,7 @@ _MAGIC: list[tuple[int, bytes, BinaryType]] = [
     (0, b"\x89PNG\r\n",   BinaryType.IMAGE),
     (0, b"\xff\xd8\xff",  BinaryType.IMAGE),
     (0, b"GIF8",          BinaryType.IMAGE),
-    (0, b"RIFF",          BinaryType.IMAGE),   # WEBP (confirmed by bytes 8-11)
+    (0, b"RIFF",          BinaryType.IMAGE),   # WEBP only — confirmed in detect_type
     (0, b"BM",            BinaryType.IMAGE),
     (0, b"PK\x03\x04",   BinaryType.ARCHIVE),  # ZIP (and Office Open XML)
     (0, b"\x1f\x8b",     BinaryType.ARCHIVE),  # gzip
@@ -28,7 +28,6 @@ _MAGIC: list[tuple[int, bytes, BinaryType]] = [
     (0, b"\xfd7zXZ",     BinaryType.ARCHIVE),  # xz
     (0, b"Rar!",         BinaryType.ARCHIVE),
     (0, b"7z\xbc\xaf",   BinaryType.ARCHIVE),
-    (0, b"ustar",        BinaryType.ARCHIVE),  # tar (offset 257 technically, simplified)
     (0, b"SQLite format", BinaryType.DATABASE),
 ]
 
@@ -48,6 +47,10 @@ def detect_type(file_path: str, header: bytes) -> BinaryType:
     # Magic bytes first (reliable)
     for offset, magic, btype in _MAGIC:
         if header[offset:offset + len(magic)] == magic:
+            # RIFF is the container for both WEBP (image) and WAV (audio).
+            # Only treat RIFF as IMAGE when bytes 8-11 confirm WEBP.
+            if magic == b"RIFF" and header[8:12] != b"WEBP":
+                continue  # WAV/other RIFF — fall through to extension check
             # ZIP could be Office Open XML — check extension
             if btype == BinaryType.ARCHIVE:
                 ext = Path(file_path).suffix.lower()

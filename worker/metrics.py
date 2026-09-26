@@ -41,5 +41,23 @@ def log(
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as fh:
             fh.write(json.dumps(record) + "\n")
+        _maybe_rotate(path)
     except Exception:
         pass  # metrics must never crash the main path
+
+
+_MAX_METRICS_BYTES: int = 10 * 1024 * 1024  # 10 MB (~25 K records)
+_KEEP_LINES: int = 10_000
+
+
+def _maybe_rotate(path: Path) -> None:
+    """Keep the metrics file under _MAX_METRICS_BYTES by retaining the last _KEEP_LINES lines."""
+    try:
+        if path.stat().st_size < _MAX_METRICS_BYTES:
+            return
+        lines = path.read_text().splitlines()
+        if len(lines) <= _KEEP_LINES:
+            return
+        path.write_text("\n".join(lines[-_KEEP_LINES:]) + "\n")
+    except Exception:
+        pass

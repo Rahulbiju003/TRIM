@@ -151,16 +151,17 @@ print(json.dumps({'file_path': fp, 'content': content}))
 " "\$FILE_PATH")" || exit 0
 fi
 
-AUTH_HEADER=""
-[[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
+# Use a private temp config to keep X-TRIM-Key out of ps aux argv
+_TRIM_CFG="$(mktemp)" || exit 0
+chmod 600 "$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
+trap 'rm -f "$_TRIM_CFG"' EXIT
 
-# SC2086: intentional word-split so -H and the value become two args for curl
-# shellcheck disable=SC2086
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
+    --config "$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/bulk-read" \
-    -H 'Content-Type: application/json' \
     --data-binary @- \
-    \${AUTH_HEADER:+\$AUTH_HEADER} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
 # Check for pass_through signal — binary type not handled, let Claude read normally
@@ -253,16 +254,17 @@ print(json.dumps({'file_path': fp, 'content': content}))
 " "\$FILE_PATH")" || exit 0
 fi
 
-AUTH_HEADER=""
-[[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
+# Use a private temp config to keep X-TRIM-Key out of ps aux argv
+_TRIM_CFG="$(mktemp)" || exit 0
+chmod 600 "$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
+trap 'rm -f "$_TRIM_CFG"' EXIT
 
-# SC2086: intentional word-split so -H and the value become two args for curl
-# shellcheck disable=SC2086
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
+    --config "$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/bulk-read" \
-    -H 'Content-Type: application/json' \
     --data-binary @- \
-    \${AUTH_HEADER:+\$AUTH_HEADER} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
 # Check for pass_through signal — binary type not handled, let Claude read normally
@@ -312,6 +314,12 @@ case "\$URL" in
     http://*|https://*) ;;
     *) exit 0 ;;
 esac
+
+# Block internal/loopback URLs — prevent SSRF via prompt injection
+# (If Claude is tricked into fetching an internal URL, the hook should not assist)
+if [[ "\$URL" =~ ^https?://(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then
+    exit 0
+fi
 
 # Fetch the URL locally — content stays on this machine
 TMPFILE="\$(mktemp)" || exit 0
@@ -375,15 +383,17 @@ fi
 
 rm -f "\$TMPFILE"
 
-AUTH_HEADER=""
-[[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
+# Use a private temp config to keep X-TRIM-Key out of ps aux argv
+_TRIM_CFG="$(mktemp)" || exit 0
+chmod 600 "$_TRIM_CFG"
+printf 'header = "Content-Type: application/json"\n' > "$_TRIM_CFG"
+[[ -n "\$TRIM_API_KEY" ]] && printf 'header = "X-TRIM-Key: %s"\n' "\$TRIM_API_KEY" >> "$_TRIM_CFG"
+trap 'rm -f "$_TRIM_CFG"' EXIT
 
-# shellcheck disable=SC2086
 RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
+    --config "$_TRIM_CFG" \
     -X POST "\${TRIM_WORKER}/web-read" \
-    -H 'Content-Type: application/json' \
     --data-binary @- \
-    \${AUTH_HEADER:+\$AUTH_HEADER} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
 
 SUMMARY="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0

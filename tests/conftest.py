@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,13 +102,16 @@ def sample_records() -> list[dict]:
 
 
 @pytest.fixture()
-def client(mock_result):
+def client(mock_result, monkeypatch):
     """FastAPI TestClient with the bulk-read endpoint mocked (no real LLM)."""
     # Import here to avoid side-effects at collection time
     import worker.server as server_module
 
+    # litellm auto-loads .env — explicitly clear auth key so unauthenticated tests work
+    monkeypatch.setattr(server_module.config, "TRIM_API_KEY", "")
+
     mock_reader = MagicMock()
-    mock_reader.run_from_content.return_value = mock_result
+    mock_reader.run_from_content = AsyncMock(return_value=mock_result)
 
     with patch.object(server_module, "_reader", mock_reader):
         with TestClient(server_module.app, raise_server_exceptions=False) as c:
@@ -125,7 +128,7 @@ def auth_client(mock_result, monkeypatch):
     monkeypatch.setattr(server_module.config, "TRIM_API_KEY", "test-secret")
 
     mock_reader = MagicMock()
-    mock_reader.run_from_content.return_value = mock_result
+    mock_reader.run_from_content = AsyncMock(return_value=mock_result)
 
     with patch.object(server_module, "_reader", mock_reader):
         with TestClient(server_module.app, raise_server_exceptions=False) as c:

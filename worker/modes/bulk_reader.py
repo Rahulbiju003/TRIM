@@ -14,6 +14,7 @@ cache key is always based on the original (uncompressed) content hash.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import time
 from dataclasses import dataclass
@@ -84,16 +85,16 @@ class BulkReaderMode:
         self.backend = backend or LiteLLMBackend()
 
     def run(self, file_path: str, question: str | None = None) -> BulkReadResult:
-        """Read *file_path* from disk and return a summary.
+        """Read *file_path* from disk and return a summary (sync wrapper for CLI).
 
         Cache hit  → returns immediately, no LLM call.
         Delta path → sends previous summary + diff to LLM (cheap update).
         Full path  → sends full file content to LLM (original behaviour).
         """
         content = self._read_file(file_path)
-        return self._run_core(file_path, content, question, "subprocess", None)
+        return asyncio.run(self._run_core(file_path, content, question, "subprocess", None))
 
-    def run_from_content(
+    async def run_from_content(
         self,
         file_path: str,
         content: str,
@@ -101,16 +102,16 @@ class BulkReaderMode:
         mode: str = "http",
         model: str | None = None,
     ) -> BulkReadResult:
-        """Like run() but caller provides file content (HTTP mode).
+        """Async variant for HTTP server mode — caller provides file content.
 
         model: optional override — binary handlers pass the vision/PDF model
                so the right LLM is used for the completion call.
         """
-        return self._run_core(file_path, content, question, mode, model)
+        return await self._run_core(file_path, content, question, mode, model)
 
     # ── core logic (single implementation shared by both public methods) ───────
 
-    def _run_core(
+    async def _run_core(
         self,
         file_path: str,
         content: str,
@@ -150,7 +151,7 @@ class BulkReaderMode:
             # stale and diff_result are guaranteed non-None by use_delta predicate
             user_message = self._build_delta_message(stale.summary, diff_result.unified)  # type: ignore[union-attr]
             t0 = time.monotonic()
-            result: CompletionResult = self.backend.complete(DELTA_SYSTEM_PROMPT, user_message)
+            result: CompletionResult = await self.backend.complete(DELTA_SYSTEM_PROMPT, user_message)
             latency_ms = (time.monotonic() - t0) * 1000
             cache.put(file_path, result.content, stale.delta_count + 1, content)  # type: ignore[union-attr]
             metrics.log(
@@ -173,7 +174,7 @@ class BulkReaderMode:
         t0 = time.monotonic()
         # Pass model= through complete(); if None, complete() uses self.backend.model
         # with context-window fallback. If set, bypasses fallback (explicit choice).
-        result = self.backend.complete(SYSTEM_PROMPT, user_message, model=model)
+        result = await self.backend.complete(SYSTEM_PROMPT, user_message, model=model)
         latency_ms = (time.monotonic() - t0) * 1000
         cache.put(file_path, result.content, 0, content)  # original content for delta
         metrics.log(

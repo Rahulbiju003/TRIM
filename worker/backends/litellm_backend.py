@@ -2,10 +2,18 @@
 
 Wraps litellm.completion so the rest of the codebase never touches litellm
 directly. All providers (OpenRouter, Gemini, OpenAI, Anthropic, Ollama …)
-are selected by the WORKER_MODEL env-var string — no code changes needed.
+are selected by the TRIM_ROUTE_TEXT env-var string — no code changes needed.
+
+Async design: complete() and complete_multimodal() are async and run the
+synchronous litellm.completion() call in a thread pool via asyncio.to_thread().
+This prevents blocking LLM calls from stalling uvicorn's event loop.
+
+Subprocess-mode callers (worker/__main__.py) drive these with asyncio.run()
+via BulkReaderMode.run() which wraps the async core in asyncio.run().
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 
@@ -48,10 +56,10 @@ class LiteLLMBackend:
         except Exception:
             self._skip_temperature = True  # safe default: unknown models skip temperature
 
-    def complete(
+    async def complete(
         self, system: str, user: str, *, model: str | None = None
     ) -> CompletionResult:
-        """Synchronous completion. Raises on error (caller handles fail-open).
+        """Async completion. Raises on error (caller handles fail-open).
 
         model: optional per-call override. When provided, that model is used
                directly with no context-window fallback (the caller has already
@@ -59,17 +67,17 @@ class LiteLLMBackend:
         """
         if model and model != self.model:
             # Explicit override — bypass fallback logic
-            return self._do_complete(model, system, user)
+            return await self._do_complete(model, system, user)
         try:
-            return self._do_complete(self.model, system, user)
+            return await self._do_complete(self.model, system, user)
         except litellm.exceptions.ContextWindowExceededError:
             fb = _routing.fallback_model()
             if fb:
-                return self._do_complete(fb, system, user)
+                return await self._do_complete(fb, system, user)
             raise
 
-    def _do_complete(self, model: str, system: str, user: str) -> CompletionResult:
-        """Internal completion parameterized by model (supports fallback model)."""
+    async def _do_complete(self, model: str, system: str, user: str) -> CompletionResult:
+        """Internal async completion. Runs litellm in a thread to avoid blocking."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -82,27 +90,16 @@ class LiteLLMBackend:
         # Temperature guard applied per-model (fallback may have different rules)
         if self.temperature is not None and not _routing.skip_temperature(model):
             kwargs["temperature"] = self.temperature
-        response = litellm.completion(**kwargs)
-        choices = getattr(response, "choices", None) or []
-        choice = choices[0] if choices else None
-        content: str = (getattr(getattr(choice, "message", None), "content", None) or "") if choice else ""
-        usage = getattr(response, "usage", None)
-        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        output_tokens = getattr(usage, "completion_tokens", 0) or 0
-        return CompletionResult(
-            content=content.strip(),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            model=model,
-        )
+        response = await asyncio.to_thread(litellm.completion, **kwargs)
+        return _parse_response(response, model)
 
-    def complete_multimodal(
+    async def complete_multimodal(
         self,
         system: str,
         user_parts: list,
         model: str | None = None,
     ) -> CompletionResult:
-        """Completion with multimodal message parts (Tier 1 native multimodal).
+        """Async completion with multimodal message parts (Tier 1 native multimodal).
 
         user_parts: list of LiteLLM message part dicts (text + image_url).
         model: override model (e.g. vision or PDF model); defaults to self.model.
@@ -119,16 +116,23 @@ class LiteLLMBackend:
         }
         if self.temperature is not None and not _routing.skip_temperature(use_model):
             kwargs["temperature"] = self.temperature
-        response = litellm.completion(**kwargs)
-        choices = getattr(response, "choices", None) or []
-        choice = choices[0] if choices else None
-        content: str = (getattr(getattr(choice, "message", None), "content", None) or "") if choice else ""
-        usage = getattr(response, "usage", None)
-        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        output_tokens = getattr(usage, "completion_tokens", 0) or 0
-        return CompletionResult(
-            content=content.strip(),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            model=use_model,
-        )
+        response = await asyncio.to_thread(litellm.completion, **kwargs)
+        return _parse_response(response, use_model)
+
+
+def _parse_response(response: object, model: str) -> CompletionResult:
+    """Extract content and token counts from a litellm response object."""
+    choices = getattr(response, "choices", None) or []
+    choice = choices[0] if choices else None
+    content: str = (
+        getattr(getattr(choice, "message", None), "content", None) or ""
+    ) if choice else ""
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+    return CompletionResult(
+        content=content.strip(),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=model,
+    )

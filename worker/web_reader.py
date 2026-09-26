@@ -67,7 +67,7 @@ class WebReaderMode:
     def __init__(self, backend: LiteLLMBackend | None = None) -> None:
         self.backend = backend or LiteLLMBackend()
 
-    def run_from_content(
+    async def run_from_content(
         self,
         url: str,
         content: str,
@@ -79,6 +79,11 @@ class WebReaderMode:
         content: Raw text content — HTML, JSON, markdown, or plain text.
         prompt:  The question from Claude's WebFetch call (used as the LLM question).
         """
+        if not _is_safe_url(url):
+            return WebReadResult(
+                summary="", url=url, input_tokens=0, output_tokens=0,
+                latency_ms=0.0, model=self.backend.model, pass_through=True,
+            )
         question = prompt or WEB_DEFAULT_QUESTION
         hostname = urlparse(url).hostname or ""
 
@@ -102,7 +107,7 @@ class WebReaderMode:
         user_message = f"URL: {url}\n\n{text}\n\n<question>{safe_q}</question>"
 
         t0 = time.monotonic()
-        result: CompletionResult = self.backend.complete(system, user_message)
+        result: CompletionResult = await self.backend.complete(system, user_message)
         latency_ms = (time.monotonic() - t0) * 1000
 
         metrics.log(
@@ -128,6 +133,22 @@ class WebReaderMode:
 
 
 # ── Content type helpers ──────────────────────────────────────────────────────
+
+_BLOCKED_HOST_RE = re.compile(
+    r"^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+"
+    r"|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+"
+    r"|169\.254\.\d+\.\d+|::1|\[::1\])$"
+)
+
+
+def _is_safe_url(url: str) -> bool:
+    """Return False for loopback/private-network URLs (SSRF prevention)."""
+    try:
+        host = urlparse(url).hostname or ""
+        return not _BLOCKED_HOST_RE.match(host)
+    except Exception:
+        return True  # unparseable URL — let it through; server will handle it
+
 
 _GITHUB_HOSTS = frozenset({
     "github.com", "www.github.com",

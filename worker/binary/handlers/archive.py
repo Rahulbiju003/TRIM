@@ -14,6 +14,7 @@ _TEXT_EXTS = {
 }
 _MAX_TEXT_BYTES = 10_000  # max bytes to include per text file
 _MAX_TEXT_FILES = 10      # max number of text files to include
+_MAX_DECOMP_BYTES = 50_000_000  # 50 MB hard ceiling — zip bomb protection
 
 
 def extract_listing(file_path: str, raw_bytes: bytes) -> str | None:
@@ -41,7 +42,10 @@ def _zip(data: bytes) -> str | None:
             ext = Path(name).suffix.lower()
             if ext in _TEXT_EXTS and size <= _MAX_TEXT_BYTES and text_included < _MAX_TEXT_FILES:
                 try:
-                    content = zf.read(name).decode("utf-8", errors="replace")
+                    raw = zf.read(name)
+                    if len(raw) > _MAX_DECOMP_BYTES:
+                        continue  # skip single oversized entry
+                    content = raw.decode("utf-8", errors="replace")
                     lines.append(f"    Content:\n{content}\n")
                     text_included += 1
                 except Exception:
@@ -72,5 +76,7 @@ def _tar(data: bytes) -> str | None:
 
 def _gz_single(file_path: str, data: bytes) -> str | None:
     inner_name = Path(file_path).stem
-    content = gzip.decompress(data).decode("utf-8", errors="replace")
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+        raw = gz.read(_MAX_DECOMP_BYTES)
+    content = raw.decode("utf-8", errors="replace")
     return f"GZ-compressed file: {inner_name}\n\n{content[:_MAX_TEXT_BYTES]}"

@@ -86,23 +86,38 @@ def get_stale(file_path: str) -> CacheEntry | None:
 
 
 def put(file_path: str, summary: str, delta_count: int, content: str) -> None:
-    """Write or update a cache entry. Never raises."""
+    """Write or update a cache entry. Never raises.
+
+    Holds LOCK_EX across the entire load→modify→save sequence to eliminate
+    the TOCTOU race where two concurrent processes could both load, both modify,
+    and the second save would silently overwrite the first.
+    """
     if not enabled():
         return
     try:
         fp = _fingerprint(file_path)
         if fp is None:
             return
-        cache = _load()
-        cache[file_path] = asdict(CacheEntry(
-            fingerprint=fp,
-            summary=summary,
-            delta_count=delta_count,
-            content=content,
-            created_at=time.time(),
-        ))
-        _evict(cache)
-        _save(cache)
+        path = Path(config.TRIM_CACHE_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(fd, "r+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)  # hold EX for entire load+save
+            try:
+                cache = json.load(fh)
+            except (json.JSONDecodeError, ValueError):
+                cache = {}
+            cache[file_path] = asdict(CacheEntry(
+                fingerprint=fp,
+                summary=summary,
+                delta_count=delta_count,
+                content=content,
+                created_at=time.time(),
+            ))
+            _evict(cache)
+            fh.seek(0)
+            fh.truncate()
+            json.dump(cache, fh)
     except Exception:
         pass  # cache writes must never crash the main path
 
@@ -127,15 +142,29 @@ def _fingerprint(file_path: str) -> str | None:
         return None
 
 
+# In-process cache: avoids re-parsing the JSON file on every call in HTTP server mode.
+# Subprocess-mode callers (fresh process per hook) get no benefit, which is fine —
+# they would not retain this between calls anyway.
+_mem_cache: dict = {}
+_mem_cache_mtime: float = -1.0
+
+
 def _load() -> dict:
+    global _mem_cache, _mem_cache_mtime
     path = Path(config.TRIM_CACHE_FILE)
     if not path.exists():
         return {}
     try:
+        mtime = path.stat().st_mtime
+        if mtime == _mem_cache_mtime and _mem_cache_mtime >= 0:
+            return dict(_mem_cache)  # shallow copy to prevent caller mutation
         fd = os.open(str(path), os.O_RDONLY)
         with os.fdopen(fd) as fh:
             fcntl.flock(fh, fcntl.LOCK_SH)
-            return json.load(fh)
+            data = json.load(fh)
+        _mem_cache = data
+        _mem_cache_mtime = mtime
+        return dict(data)
     except Exception:
         return {}
 

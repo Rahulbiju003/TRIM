@@ -13,6 +13,9 @@ import subprocess
 from dataclasses import dataclass
 
 
+_RTK_PATH: str | None = shutil.which("rtk")
+
+
 @dataclass
 class RTKResult:
     content: str
@@ -28,7 +31,7 @@ class RTKResult:
 
 def is_available() -> bool:
     """True if the `rtk` binary is on PATH."""
-    return shutil.which("rtk") is not None
+    return _RTK_PATH is not None
 
 
 def compress(file_path: str, original_content: str) -> RTKResult | None:
@@ -37,11 +40,11 @@ def compress(file_path: str, original_content: str) -> RTKResult | None:
     Returns RTKResult on success, None if RTK is unavailable or errors.
     Never raises — always fails gracefully so caller falls through to LLM path.
     """
-    if not is_available():
+    if _RTK_PATH is None:
         return None
     try:
         proc = subprocess.run(
-            ["rtk", "read", "--filter=aggressive", file_path],
+            [_RTK_PATH, "read", "--filter=aggressive", file_path],
             capture_output=True,
             text=True,
             timeout=10,

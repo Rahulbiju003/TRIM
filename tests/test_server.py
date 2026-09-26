@@ -1,7 +1,7 @@
 """Tests for worker/server.py — FastAPI endpoints."""
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import worker.server as server_module
 
@@ -60,8 +60,8 @@ class TestApiMetrics:
         body = resp.json()
         assert body["count"] == len(body["records"])
 
-    def test_no_auth_required(self, auth_client):
-        resp = auth_client.get("/api/metrics")
+    def test_no_auth_required(self, client):
+        resp = client.get("/api/metrics")
         assert resp.status_code == 200
 
 
@@ -85,7 +85,7 @@ class TestBulkRead:
     def test_reader_called_with_correct_file_path(self, client, mock_result):
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.return_value = mock_result
+            mock_reader.run_from_content = AsyncMock(return_value=mock_result)
             client.post("/bulk-read", json=self._payload(file_path="/my/file.py"))
             call_kwargs = mock_reader.run_from_content.call_args[1]
             assert call_kwargs.get("file_path") == "/my/file.py"
@@ -111,7 +111,7 @@ class TestBulkRead:
     def test_question_forwarded_to_reader(self, client, mock_result):
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.return_value = mock_result
+            mock_reader.run_from_content = AsyncMock(return_value=mock_result)
             client.post("/bulk-read", json=self._payload(question="What does it do?"))
             call_kwargs = mock_reader.run_from_content.call_args[1]
             assert call_kwargs.get("question") == "What does it do?"
@@ -133,7 +133,7 @@ class TestBulkRead:
     def test_backend_error_returns_500(self, client, mock_result):
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.side_effect = RuntimeError("boom")
+            mock_reader.run_from_content = AsyncMock(side_effect=RuntimeError("boom"))
             resp = client.post("/bulk-read", json=self._payload())
         assert resp.status_code == 500
 
@@ -142,9 +142,9 @@ class TestBulkRead:
         import litellm.exceptions
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.side_effect = litellm.exceptions.RateLimitError(
+            mock_reader.run_from_content = AsyncMock(side_effect=litellm.exceptions.RateLimitError(
                 message="Too many requests", llm_provider="openai", model="gpt-4.1-nano"
-            )
+            ))
             resp = client.post("/bulk-read", json=self._payload())
         assert resp.status_code == 429
 
@@ -153,16 +153,16 @@ class TestBulkRead:
         import litellm.exceptions
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.side_effect = litellm.exceptions.RateLimitError(
+            mock_reader.run_from_content = AsyncMock(side_effect=litellm.exceptions.RateLimitError(
                 message="secret_key_leak", llm_provider="openai", model="gpt-4.1-nano"
-            )
+            ))
             resp = client.post("/bulk-read", json=self._payload())
         assert "secret_key_leak" not in resp.text
 
     def test_mode_is_http(self, client, mock_result):
         import worker.server as srv
         with patch.object(srv, "_reader") as mock_reader:
-            mock_reader.run_from_content.return_value = mock_result
+            mock_reader.run_from_content = AsyncMock(return_value=mock_result)
             client.post("/bulk-read", json=self._payload())
             call_kwargs = mock_reader.run_from_content.call_args[1]
             assert call_kwargs.get("mode") == "http"
@@ -212,9 +212,10 @@ class TestAuth:
         resp = auth_client.get("/dashboard")
         assert resp.status_code == 200
 
-    def test_metrics_open_with_auth_configured(self, auth_client):
+    def test_metrics_gated_with_auth_configured(self, auth_client):
+        """With TRIM_API_KEY set, /api/metrics requires auth."""
         resp = auth_client.get("/api/metrics")
-        assert resp.status_code == 200
+        assert resp.status_code == 401
 
 
 # ── _SlidingWindowRateLimiter (unit) ─────────────────────────────────────────
@@ -243,7 +244,7 @@ class TestSlidingWindowRateLimiter:
         assert not limiter.is_allowed()
 
     def test_window_expires_old_requests(self):
-        from unittest.mock import patch as _patch
+        from unittest.mock import AsyncMock, patch as _patch
         limiter = server_module._SlidingWindowRateLimiter(2)
         with _patch("worker.server.time") as mock_time:
             mock_time.monotonic.return_value = 0.0
@@ -256,7 +257,7 @@ class TestSlidingWindowRateLimiter:
 
     def test_partial_window_expiry(self):
         """Only requests outside the 60s window should be evicted."""
-        from unittest.mock import patch as _patch
+        from unittest.mock import AsyncMock, patch as _patch
         limiter = server_module._SlidingWindowRateLimiter(2)
         with _patch("worker.server.time") as mock_time:
             mock_time.monotonic.return_value = 0.0
