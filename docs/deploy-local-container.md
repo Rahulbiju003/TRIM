@@ -27,14 +27,26 @@ Edit `.env`. Remove all inline comments from lines with values — Podman's `--e
 Minimum required configuration:
 
 ```bash
-WORKER_MODEL=gemini/gemini-2.5-flash
+TRIM_ROUTE_TEXT=gemini/gemini-2.5-flash
 GEMINI_API_KEY=<your-key>
 WORKER_URL=http://localhost:8080
 SHUNT_MIN_LINES=350
 SHUNT_TIMEOUT_SECONDS=45
-SHUNT_MAX_BYTES=400000
 WORKER_PORT=8080
 ```
+
+> **Note:** `SHUNT_MAX_BYTES` is no longer needed — TRIM computes the payload ceiling dynamically from the model's context window. Set it only if you need an explicit override.
+
+For multimodal routing (PDF, image support), add:
+
+```bash
+# Optional — falls back to TRIM_ROUTE_TEXT if unset
+TRIM_ROUTE_PDF=gemini/gemini-2.5-flash
+TRIM_ROUTE_VISION=gemini/gemini-2.5-flash
+TRIM_ROUTE_FALLBACK=gemini/gemini-2.5-pro
+```
+
+`WORKER_MODEL` is accepted as a legacy alias for `TRIM_ROUTE_TEXT` and continues to work.
 
 ### 2. Build the image
 

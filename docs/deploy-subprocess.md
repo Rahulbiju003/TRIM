@@ -24,11 +24,15 @@ cp .env.example .env
 Edit `.env`. At minimum, set:
 
 ```bash
-WORKER_MODEL=gemini/gemini-2.5-flash
+TRIM_ROUTE_TEXT=gemini/gemini-2.5-flash
 GEMINI_API_KEY=<your-key>
 ```
 
+`WORKER_MODEL` is accepted as a legacy alias for `TRIM_ROUTE_TEXT` and continues to work.
+
 Do not set `WORKER_URL` — leaving it unset activates subprocess mode.
+
+> **Note:** `SHUNT_MAX_BYTES` is no longer needed — TRIM computes the payload ceiling dynamically from the model's context window. Set it only if you need an explicit override.
 
 ### 2. Create the venv and install
 

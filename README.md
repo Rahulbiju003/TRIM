@@ -4,6 +4,25 @@ TRIM is a Claude Code hook harness that intercepts large file reads and routes t
 
 ---
 
+## Quick start — joining a team deployment
+
+If your team already has a TRIM server running, you only need two steps:
+
+```bash
+# 1. Clone TRIM (hook installer only — no API keys needed on your machine)
+git clone https://github.com/Rahulbiju003/TRIM.git
+cd TRIM
+
+# 2. Install hooks into your project, pointed at the shared server
+WORKER_URL=https://trim.your-company.com \
+TRIM_API_KEY=<shared-secret-from-your-team> \
+  ./setup.sh --install /path/to/your/project
+```
+
+That's it. Open Claude Code in your project — large file reads are now routed through TRIM. No API keys, no Python venv, no container required on your machine.
+
+---
+
 ## How it works
 
 ```
@@ -38,9 +57,9 @@ Choose a deployment strategy based on your environment:
 
 | Strategy | Infrastructure | Best for |
 |----------|---------------|----------|
+| [Remote server](docs/deploy-remote-server.md) | Any Linux host | **Recommended: shared team deployment** |
+| [Local container](docs/deploy-local-container.md) | Podman / Docker | Single developer, persistent server |
 | [Subprocess](docs/deploy-subprocess.md) | None | Single developer, no container runtime |
-| [Local container](docs/deploy-local-container.md) | Podman / Docker | Local server, persistent process |
-| [Remote server](docs/deploy-remote-server.md) | Any Linux host | Shared team deployment |
 
 ---
 
@@ -61,7 +80,7 @@ Set in `.env`:
 
 ```bash
 GEMINI_API_KEY=...
-WORKER_MODEL=gemini/gemini-2.5-flash
+TRIM_ROUTE_TEXT=gemini/gemini-2.5-flash
 ```
 
 ---
@@ -76,13 +95,17 @@ For production deployments, do not store API keys in `.env` files on shared infr
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WORKER_MODEL` | — | Required. Any [LiteLLM model string](https://docs.litellm.ai/docs/providers) |
+| `TRIM_ROUTE_TEXT` | — | Required. Primary model for text summarization. Any [LiteLLM model string](https://docs.litellm.ai/docs/providers) |
+| `TRIM_ROUTE_PDF` | _(unset)_ | Model for PDFs. Falls back to `TRIM_ROUTE_TEXT` and checks capability |
+| `TRIM_ROUTE_VISION` | _(unset)_ | Model for images. Falls back to `TRIM_ROUTE_TEXT` and checks capability |
+| `TRIM_ROUTE_FALLBACK` | _(unset)_ | Large-context model used when context window is exceeded |
+| `WORKER_MODEL` | — | Legacy alias for `TRIM_ROUTE_TEXT`. Accepted for backward compatibility |
 | `SHUNT_MIN_LINES` | `350` | Files at or above this line count are delegated |
 | `SHUNT_TIMEOUT_SECONDS` | `45` | Worker timeout in seconds — fail-open if exceeded |
-| `SHUNT_MAX_BYTES` | `400000` | Maximum payload bytes (`400000` on macOS, `120000` on Linux) |
+| `SHUNT_MAX_BYTES` | _(computed)_ | Maximum payload bytes. When unset, computed dynamically from the model's context window. Set explicitly to override |
 | `WORKER_URL` | _(unset)_ | Unset = subprocess mode; set = HTTP mode |
 | `WORKER_PORT` | `8080` | HTTP server port |
-| `WORKER_TEMPERATURE` | _(unset)_ | Sampling temperature. Omit to use provider default |
+| `WORKER_TEMPERATURE` | _(unset)_ | Sampling temperature. Omit to use provider default. Automatically ignored for reasoning/thinking models |
 | `SHUNT_METRICS_FILE` | `/tmp/trim-metrics.jsonl` | Delegation log path |
 | `TRIM_API_KEY` | _(unset)_ | Shared secret for `/bulk-read`. Required in multi-user deployments |
 | `SHUNT_RATE_LIMIT_RPM` | `0` (off) | Server-wide request cap per minute. Hook fails-open on 429 |
@@ -99,10 +122,23 @@ For production deployments, do not store API keys in `.env` files on shared infr
 | `Read file.java` | ≥ 350 lines | Delegated — summary injected |
 | `Read file.java` with `offset` / `limit` | Any size | Pass through (intentional partial read) |
 | `Read small.py` | < 350 lines | Pass through |
-| `Read file.pdf` / `Read image.png` | Any size | Pass through (binary format) |
+| `Read file.pdf` | Any size | Tier 1 (native multimodal) or Tier 2 (text extraction), or pass through |
+| `Read image.png` | Any size | Tier 1 (vision model) if available, else pass through |
+| `Read document.docx` | Any size | Tier 2 (text extraction) |
+| `Read archive.zip` | ≤ 50 MB | Tier 2 (listing + text file content) |
 | `Bash: cat large.py` | ≥ 350 lines, no pipe | Delegated — summary injected |
 | `Bash: cat file \| grep foo` | Piped command | Pass through |
 | `Bash: cat *.log` | Glob pattern | Pass through |
+
+---
+
+## Binary file support
+
+TRIM uses a two-tier strategy for binary files:
+
+- **Tier 1 (native multimodal):** PDFs and images are sent directly to a multimodal LLM (e.g. Gemini Flash) if `TRIM_ROUTE_PDF` or `TRIM_ROUTE_VISION` is configured and the model supports it.
+- **Tier 2 (text extraction):** Office documents (`.docx`, `.xlsx`, `.pptx`), archives (`.zip`, `.tar`, `.gz`), and SQLite databases have their content extracted as text and summarized normally.
+- **Pass-through:** Unsupported binary types (compiled binaries, media files, etc.) are returned to Claude unchanged.
 
 ---
 
@@ -166,12 +202,18 @@ TRIM/
 │   └── settings.json               # Hook registration for TRIM development
 ├── worker/
 │   ├── config.py                   # Environment configuration
+│   ├── routing.py                  # Dynamic model routing + context-window sizing
+│   ├── rtk.py                      # RTK (Rust Token Killer) optional pre-compressor
 │   ├── metrics.py                  # JSONL metrics writer
 │   ├── dashboard.py                # Dashboard renderer
 │   ├── server.py                   # FastAPI: /health /bulk-read /dashboard
 │   ├── __main__.py                 # CLI entry points
 │   ├── backends/
 │   │   └── litellm_backend.py      # LiteLLM provider wrapper
+│   ├── binary/
+│   │   ├── __init__.py             # Binary processing dispatcher
+│   │   ├── detector.py             # Magic-byte + extension type detection
+│   │   └── handlers/               # Per-type handlers (pdf, image, office, archive, database)
 │   └── modes/
 │       └── bulk_reader.py          # Summarisation logic
 ├── docs/
@@ -190,7 +232,6 @@ TRIM/
 ## Caveats
 
 - **Summaries are lossy.** TRIM trades full fidelity for token efficiency. When Claude needs exact line numbers or a precise code snippet, it reads the file in sections using `offset`/`limit` — those partial reads pass through normally.
-- **Binary files pass through.** PDFs, images, archives, compiled files, and media files are never intercepted — they cannot be meaningfully summarised as text.
 - **Works with Claude Code only.** TRIM uses PreToolUse hooks, a Claude Code feature. It does not intercept API calls or other clients.
 - **Line threshold is configurable.** Adjust `SHUNT_MIN_LINES` in `.env` to tune the routing threshold for your codebase.
 
