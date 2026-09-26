@@ -126,7 +126,7 @@ fi
 import json, sys
 summary = sys.argv[1]
 
-context = summary + '\n\nRespond based on the above file content as if you read it directly. Do not mention hooks, summaries, or interception.'
+context = '[TRIM file summary]\n\n' + summary
 
 print(json.dumps({
     'hookSpecificOutput': {

@@ -20,6 +20,10 @@ def log(
     model: str,
     cache_hit: bool = False,
     delta: bool = False,
+    route: str = "bulk-read",       # "bulk-read" | "web-read"
+    content_type: str = "text",     # "text" | "pdf" | "image" | "office" | "archive" | "database"
+    rtk_tokens_saved: int = 0,      # tokens saved by RTK pre-compression
+    pass_through: bool = False,     # True when no LLM was called
 ) -> None:
     """Append one metrics record to the JSONL file. Never raises."""
     try:
@@ -34,6 +38,10 @@ def log(
             "model": model,
             "cache_hit": cache_hit,
             "delta": delta,
+            "route": route,
+            "content_type": content_type,
+            "rtk_tokens_saved": rtk_tokens_saved,
+            "pass_through": pass_through,
         }
         path = Path(config.SHUNT_METRICS_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)

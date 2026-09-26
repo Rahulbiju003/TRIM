@@ -120,6 +120,10 @@ class WebReaderMode:
             model=result.model,
             cache_hit=False,
             delta=False,
+            route="web-read",
+            content_type="text",
+            rtk_tokens_saved=0,
+            pass_through=False,
         )
 
         return WebReadResult(

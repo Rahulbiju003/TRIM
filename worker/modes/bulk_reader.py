@@ -129,6 +129,7 @@ class BulkReaderMode:
                 file_path=file_path, line_count=line_count, latency_ms=0.0,
                 input_tokens=0, output_tokens=0, mode=mode,
                 model=self.backend.model, cache_hit=True, delta=False,
+                route="bulk-read", content_type="text", rtk_tokens_saved=0, pass_through=False,
             )
             return BulkReadResult(
                 summary=entry.summary, file_path=file_path, line_count=line_count,
@@ -158,6 +159,7 @@ class BulkReaderMode:
                 file_path=file_path, line_count=line_count, latency_ms=latency_ms,
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens,
                 mode=mode, model=result.model, cache_hit=False, delta=True,
+                route="bulk-read", content_type="text", rtk_tokens_saved=0, pass_through=False,
             )
             return BulkReadResult(
                 summary=result.content, file_path=file_path, line_count=line_count,
@@ -169,6 +171,7 @@ class BulkReaderMode:
         # RTK Tier 0: try to pre-compress. Cache key uses original content.
         rtk_result = _rtk.compress(file_path, content)
         content_for_llm = rtk_result.content if rtk_result is not None else content
+        rtk_tokens_saved = max(0, (len(content) - len(content_for_llm)) // 4) if rtk_result is not None else 0
 
         user_message = self._build_user_message(file_path, content_for_llm, question)
         t0 = time.monotonic()
@@ -181,6 +184,7 @@ class BulkReaderMode:
             file_path=file_path, line_count=line_count, latency_ms=latency_ms,
             input_tokens=result.input_tokens, output_tokens=result.output_tokens,
             mode=mode, model=result.model, cache_hit=False, delta=False,
+            route="bulk-read", content_type="text", rtk_tokens_saved=rtk_tokens_saved, pass_through=False,
         )
         return BulkReadResult(
             summary=result.content, file_path=file_path, line_count=line_count,

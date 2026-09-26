@@ -184,6 +184,26 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   border-radius:3px;padding:1px 6px;font-size:10px;color:var(--muted)
 }}
 .empty{{color:var(--muted);text-align:center;padding:32px}}
+/* ── breakdown pills ── */
+.pill-row{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}}
+.pill{{
+  background:var(--surface2);border:1px solid var(--border);border-radius:20px;
+  padding:4px 12px;font-size:11px;display:flex;align-items:center;gap:6px
+}}
+.pill-dot{{width:8px;height:8px;border-radius:50%;display:inline-block}}
+.pill-count{{color:var(--text-bright);font-weight:600}}
+.pill-label{{color:var(--muted)}}
+.mini-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:4px}}
+.mini-stat{{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px}}
+.mini-label{{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}}
+.mini-value{{color:var(--text-bright);font-size:18px;font-weight:700;margin-top:4px}}
+.mini-sub{{color:var(--muted);font-size:9px;margin-top:2px}}
+.tag-web{{background:rgba(240,165,0,.15);border-color:rgba(240,165,0,.4);color:var(--amber)}}
+.tag-bulk{{background:var(--accent-dim);border-color:rgba(77,157,224,.3);color:var(--accent)}}
+.tag-cache{{background:var(--green-dim);border-color:rgba(61,220,132,.3);color:var(--green)}}
+.tag-delta{{background:rgba(180,120,255,.12);border-color:rgba(180,120,255,.3);color:#b478ff}}
+.tag-pass{{background:rgba(90,122,154,.1);border-color:var(--border);color:var(--muted)}}
+.tag-pdf{{background:rgba(224,82,82,.12);border-color:rgba(224,82,82,.3);color:var(--red)}}
 /* ── footer ── */
 .footer{{
   display:flex;align-items:center;justify-content:space-between;
@@ -231,6 +251,26 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
     <div class="card-value" id="v-latency">—</div>
     <div class="card-sub">per delegation</div>
   </div>
+  <div class="card green">
+    <div class="card-label">Cache Hits</div>
+    <div class="card-value" id="v-cache">—</div>
+    <div class="card-sub" id="v-cache-sub">LLM calls skipped</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Pass-throughs</div>
+    <div class="card-value" id="v-passthrough">—</div>
+    <div class="card-sub">unsupported types</div>
+  </div>
+  <div class="card amber">
+    <div class="card-label">RTK Saved</div>
+    <div class="card-value" id="v-rtk">—</div>
+    <div class="card-sub">tokens pre-compressed</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Delta Updates</div>
+    <div class="card-value" id="v-delta">—</div>
+    <div class="card-sub">cheap patch vs full re-summarize</div>
+  </div>
 </div>
 
 <div class="section">
@@ -239,6 +279,21 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   </div>
   <div id="chart" class="bar-chart"></div>
   <p id="chart-empty" class="empty" style="display:none">No data yet — read a file with &gt;350 lines to see activity</p>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <span class="section-title">Traffic Breakdown</span>
+  </div>
+  <div class="mini-grid" id="mini-breakdown"></div>
+  <div style="margin-top:14px">
+    <div class="section-title" style="margin-bottom:8px">Routes</div>
+    <div class="pill-row" id="route-pills"></div>
+  </div>
+  <div style="margin-top:12px">
+    <div class="section-title" style="margin-bottom:8px">Content Types</div>
+    <div class="pill-row" id="type-pills"></div>
+  </div>
 </div>
 
 <div class="section">
@@ -256,8 +311,8 @@ td.cost-cell{{color:var(--green);font-variant-numeric:tabular-nums}}
   <table>
     <thead>
       <tr>
-        <th>Time (UTC)</th><th>File</th><th>Lines</th>
-        <th>Latency</th><th>In Tok</th><th>Out Tok</th><th>Cost</th><th>Mode</th><th>Model</th>
+        <th>Time (UTC)</th><th>File / URL</th><th>Lines</th>
+        <th>Latency</th><th>In Tok</th><th>Out Tok</th><th>Cost</th><th>Route</th><th>Type</th><th>Status</th><th>Model</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -388,6 +443,13 @@ const tbody = document.getElementById("tbody");
 if (RECENT.length) {{
   RECENT.forEach(r => {{
     const short = r.file.length > 44 ? "\u2026" + r.file.slice(-41) : r.file;
+    const routeCls = r.route === "web-read" ? "tag-web" : "tag-bulk";
+    const typeCls  = r.content_type === "pdf" ? "tag-pdf" : "";
+    let statusTag = "";
+    if (r.pass_through)   statusTag = `<span class="tag tag-pass">pass</span>`;
+    else if (r.cache_hit) statusTag = `<span class="tag tag-cache">cache</span>`;
+    else if (r.delta)     statusTag = `<span class="tag tag-delta">delta</span>`;
+    else                  statusTag = `<span class="tag">full</span>`;
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="num">${{esc(r.ts_human)}}</td>
@@ -397,14 +459,63 @@ if (RECENT.length) {{
       <td class="num">${{r.input_tokens.toLocaleString()}}</td>
       <td class="num">${{r.output_tokens.toLocaleString()}}</td>
       <td class="cost-cell">${{fmtCost(r.cost_usd)}}</td>
-      <td><span class="tag">${{esc(r.mode)}}</span></td>
+      <td><span class="tag ${{routeCls}}">${{esc(r.route)}}</span></td>
+      <td><span class="tag ${{typeCls}}">${{esc(r.content_type)}}</span></td>
+      <td>${{statusTag}}</td>
       <td><span class="tag">${{esc(r.model)}}</span></td>`;
     tbody.appendChild(tr);
   }});
 }} else {{
   tbody.innerHTML =
-    '<tr><td colspan="9" class="empty">No delegations yet — ask Claude to read a file &gt;350 lines</td></tr>';
+    '<tr><td colspan="11" class="empty">No delegations yet — ask Claude to read a file &gt;350 lines</td></tr>';
 }}
+
+// ── new stat cards ──────────────────────────────────────────────────────────
+document.getElementById("v-cache").textContent = S.cache_hits.toLocaleString();
+if (S.total_delegations > 0) {{
+  const pct = Math.round(S.cache_hits / S.total_delegations * 100);
+  document.getElementById("v-cache-sub").textContent = pct + "% hit rate";
+}}
+document.getElementById("v-passthrough").textContent = S.total_pass_throughs.toLocaleString();
+document.getElementById("v-rtk").textContent = fmtTok(S.total_rtk_tokens_saved || 0);
+document.getElementById("v-delta").textContent = S.delta_updates.toLocaleString();
+
+// ── traffic breakdown ────────────────────────────────────────────────────────
+const miniBreakdown = document.getElementById("mini-breakdown");
+const llmCalls = Math.max(0, S.total_delegations - S.cache_hits - S.total_pass_throughs);
+[
+  ["LLM Calls",      llmCalls,                   "full requests"],
+  ["Cache Hits",     S.cache_hits,               "free (no LLM)"],
+  ["Delta Updates",  S.delta_updates,            "cheap patches"],
+  ["Pass-throughs",  S.total_pass_throughs,      "type not handled"],
+  ["RTK Savings",    fmtTok(S.total_rtk_tokens_saved||0), "tokens pre-compressed"],
+].forEach(([label, val, sub]) => {{
+  const el = document.createElement("div");
+  el.className = "mini-stat";
+  const v = typeof val === "number" ? val.toLocaleString() : val;
+  el.innerHTML = `<div class="mini-label">${{esc(label)}}</div>
+    <div class="mini-value">${{v}}</div>
+    <div class="mini-sub">${{sub}}</div>`;
+  miniBreakdown.appendChild(el);
+}});
+
+const ROUTE_COLORS = {{"bulk-read":"#4d9de0","web-read":"#f0a500"}};
+const TYPE_COLORS  = {{"text":"#4d9de0","pdf":"#e05252","image":"#f0a500","office":"#3ddc84","archive":"#b478ff","database":"#5a7a9a"}};
+
+function makePills(containerId, counts, colors) {{
+  const container = document.getElementById(containerId);
+  const entries = Object.entries(counts || {{}}).sort((a,b)=>b[1]-a[1]);
+  if (!entries.length) {{ container.innerHTML = '<span style="color:var(--muted);font-size:11px">No data yet</span>'; return; }}
+  entries.forEach(([name, count]) => {{
+    const pill = document.createElement("div");
+    pill.className = "pill";
+    const color = colors[name] || "#5a7a9a";
+    pill.innerHTML = `<span class="pill-dot" style="background:${{color}}"></span><span class="pill-count">${{count}}</span><span class="pill-label">${{esc(name)}}</span>`;
+    container.appendChild(pill);
+  }});
+}}
+makePills("route-pills", S.route_counts, ROUTE_COLORS);
+makePills("type-pills",  S.content_type_counts, TYPE_COLORS);
 
 // ── countdown ────────────────────────────────────────────────────────────────
 let t = 30;
@@ -450,6 +561,12 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         "model_breakdown": {},
         "delegations_by_day": {},
         "recent": [],
+        "route_counts": {},
+        "content_type_counts": {},
+        "total_rtk_tokens_saved": 0,
+        "total_pass_throughs": 0,
+        "cache_hits": 0,
+        "delta_updates": 0,
     }
     if not records:
         return empty
@@ -467,6 +584,13 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     day_counts: dict[str, int] = defaultdict(int)
     total_cost = 0.0
     has_unknown = False
+
+    route_counts: dict[str, int] = defaultdict(int)
+    content_type_counts: dict[str, int] = defaultdict(int)
+    total_rtk_saved = 0
+    total_pass_throughs = 0
+    cache_hits = 0
+    delta_updates = 0
 
     for r in records:
         model = r.get("model", "unknown")
@@ -489,6 +613,16 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         if ts is not None:
             day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
             day_counts[day] += 1
+
+        route_counts[r.get("route", "bulk-read")] += 1
+        content_type_counts[r.get("content_type", "text")] += 1
+        total_rtk_saved += r.get("rtk_tokens_saved", 0)
+        if r.get("pass_through"):
+            total_pass_throughs += 1
+        if r.get("cache_hit"):
+            cache_hits += 1
+        if r.get("delta"):
+            delta_updates += 1
 
     # Round model costs (only where pricing is known)
     for m in model_data.values():
@@ -516,6 +650,12 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
             "cost_usd": round(rec_cost, 6) if rec_cost is not None else None,
             "model": model,
             "mode": r.get("mode", "—"),
+            "route": r.get("route", "bulk-read"),
+            "content_type": r.get("content_type", "text"),
+            "cache_hit": r.get("cache_hit", False),
+            "delta": r.get("delta", False),
+            "pass_through": r.get("pass_through", False),
+            "rtk_tokens_saved": r.get("rtk_tokens_saved", 0),
         })
 
     return {
@@ -528,6 +668,12 @@ def compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         "model_breakdown": {k: dict(v) for k, v in model_data.items()},
         "delegations_by_day": dict(sorted(day_counts.items())),
         "recent": recent_formatted,
+        "route_counts": dict(route_counts),
+        "content_type_counts": dict(content_type_counts),
+        "total_rtk_tokens_saved": total_rtk_saved,
+        "total_pass_throughs": total_pass_throughs,
+        "cache_hits": cache_hits,
+        "delta_updates": delta_updates,
     }
 
 

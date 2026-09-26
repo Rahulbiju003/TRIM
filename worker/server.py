@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from worker import binary, config, dashboard, routing
+from worker import binary, config, dashboard, metrics, routing
 from worker.backends.litellm_backend import LiteLLMBackend
 from worker.modes.bulk_reader import BulkReaderMode, SYSTEM_PROMPT
 from worker.web_reader import WebReaderMode
@@ -193,6 +193,15 @@ async def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
 
     # (None, None) → unsupported binary type, signal pass-through to hook
     if text_content is None and multimodal_parts is None:
+        from worker.binary.detector import BinaryType, detect_type as _detect
+        _ftype = _detect(req.file_path, raw_bytes[:512])
+        _ctype = _ftype.name.lower() if _ftype else "unknown"
+        metrics.log(
+            file_path=req.file_path, line_count=0, latency_ms=0.0,
+            input_tokens=0, output_tokens=0, mode="http",
+            model=config.TRIM_ROUTE_TEXT, cache_hit=False, delta=False,
+            route="bulk-read", content_type=_ctype, rtk_tokens_saved=0, pass_through=True,
+        )
         return BulkReadResponse(
             summary="",
             file_path=req.file_path,
@@ -212,12 +221,31 @@ async def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
         ftype = detect_type(req.file_path, raw_bytes[:512])
         if ftype == BinaryType.PDF:
             use_model = pdf_model or config.TRIM_ROUTE_TEXT
+            _ctype = "pdf"
         else:
             use_model = vision_model or config.TRIM_ROUTE_TEXT
+            _ctype = ftype.name.lower() if ftype else "image"
         completion = await _backend.complete_multimodal(
             system=SYSTEM_PROMPT,
             user_parts=multimodal_parts,
             model=use_model,
+        )
+        latency_ms = (time.monotonic() - t0) * 1000
+        metrics.log(
+            file_path=req.file_path, line_count=0, latency_ms=latency_ms,
+            input_tokens=completion.input_tokens, output_tokens=completion.output_tokens,
+            mode="http", model=completion.model, cache_hit=False, delta=False,
+            route="bulk-read", content_type=_ctype, rtk_tokens_saved=0, pass_through=False,
+        )
+        return BulkReadResponse(
+            summary=completion.content,
+            file_path=req.file_path,
+            line_count=0,
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+            latency_ms=latency_ms,
+            model=completion.model,
+            pass_through=False,
         )
     else:
         # Tier 2: text extraction — run through the normal text summarization path
@@ -238,18 +266,6 @@ async def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
             model=result.model,
             pass_through=False,
         )
-
-    latency_ms = (time.monotonic() - t0) * 1000
-    return BulkReadResponse(
-        summary=completion.content,
-        file_path=req.file_path,
-        line_count=0,
-        input_tokens=completion.input_tokens,
-        output_tokens=completion.output_tokens,
-        latency_ms=latency_ms,
-        model=completion.model,
-        pass_through=False,
-    )
 
 
 class WebReadRequest(BaseModel):
@@ -289,6 +305,12 @@ async def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
                 vision_model=vision_model,
             )
             if text_content is None and multimodal_parts is None:
+                metrics.log(
+                    file_path=req.url, line_count=0, latency_ms=0.0,
+                    input_tokens=0, output_tokens=0, mode="http",
+                    model=config.TRIM_ROUTE_TEXT, cache_hit=False, delta=False,
+                    route="web-read", content_type="unknown", rtk_tokens_saved=0, pass_through=True,
+                )
                 return WebReadResponse(
                     summary="", url=req.url, input_tokens=0, output_tokens=0,
                     latency_ms=0.0, model=config.TRIM_ROUTE_TEXT, pass_through=True,
@@ -300,6 +322,19 @@ async def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
                     system=SYSTEM_PROMPT,
                     user_parts=multimodal_parts,
                     model=use_model,
+                )
+                latency_ms = (time.monotonic() - t0) * 1000
+                metrics.log(
+                    file_path=req.url, line_count=0, latency_ms=latency_ms,
+                    input_tokens=completion.input_tokens, output_tokens=completion.output_tokens,
+                    mode="http", model=completion.model, cache_hit=False, delta=False,
+                    route="web-read", content_type="pdf", rtk_tokens_saved=0, pass_through=False,
+                )
+                return WebReadResponse(
+                    summary=completion.content, url=req.url,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    latency_ms=latency_ms, model=completion.model,
                 )
             else:
                 assert text_content is not None
@@ -313,13 +348,6 @@ async def web_read(req: WebReadRequest, request: Request) -> WebReadResponse:
                     latency_ms=web_result.latency_ms, model=web_result.model,
                     pass_through=web_result.pass_through,
                 )
-            latency_ms = (time.monotonic() - t0) * 1000
-            return WebReadResponse(
-                summary=completion.content, url=req.url,
-                input_tokens=completion.input_tokens,
-                output_tokens=completion.output_tokens,
-                latency_ms=latency_ms, model=completion.model,
-            )
         else:
             if not req.content:
                 raise HTTPException(status_code=422, detail="content is required for non-binary requests")
