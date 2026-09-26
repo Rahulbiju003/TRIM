@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from worker.backends.litellm_backend import CompletionResult, LiteLLMBackend
-from worker import config, metrics
+from worker import metrics
 
 WEB_SYSTEM_PROMPT = """\
 You are a precise technical content analyst. You receive the content of a web page \
