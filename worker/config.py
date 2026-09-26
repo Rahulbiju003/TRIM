@@ -80,6 +80,14 @@ SHUNT_TIMEOUT_SECONDS: int = _int("SHUNT_TIMEOUT_SECONDS", 45)
 # Set the env var explicitly to restore the old static behaviour.
 SHUNT_MAX_BYTES: int | None = _optional_int("SHUNT_MAX_BYTES")
 
+# ── Web fetch thresholds ───────────────────────────────────────────────────────
+# Minimum response size (bytes) before TRIM intercepts a WebFetch call.
+# Responses smaller than this are let through unchanged.
+SHUNT_MIN_WEB_BYTES: int = _int("SHUNT_MIN_WEB_BYTES", 10_000)   # 10 KB default
+# Maximum response size (bytes) TRIM will attempt to summarise via WebFetch.
+# Responses larger than this are passed through (curl --max-filesize enforces this).
+SHUNT_MAX_WEB_BYTES: int = _int("SHUNT_MAX_WEB_BYTES", 5_000_000)  # 5 MB default
+
 # ── Deployment mode ───────────────────────────────────────────────────────────
 # Unset → subprocess mode.  Set → HTTP mode (value is the base URL).
 WORKER_URL: str = os.environ.get("WORKER_URL", "").rstrip("/")
