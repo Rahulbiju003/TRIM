@@ -107,7 +107,7 @@ For production deployments, do not store API keys in `.env` files on shared infr
 | `WORKER_PORT` | `8080` | HTTP server port |
 | `WORKER_TEMPERATURE` | _(unset)_ | Sampling temperature. Omit to use provider default. Automatically ignored for reasoning/thinking models |
 | `SHUNT_METRICS_FILE` | `/tmp/trim-metrics.jsonl` | Delegation log path |
-| `TRIM_API_KEY` | _(unset)_ | Shared secret for `/bulk-read`. Required in multi-user deployments |
+| `TRIM_API_KEY` | _(unset)_ | Shared secret for `/bulk-read`, `/web-read`, and `/api/metrics`. Required in multi-user deployments |
 | `SHUNT_RATE_LIMIT_RPM` | `0` (off) | Server-wide request cap per minute. Hook fails-open on 429 |
 | `TRIM_CACHE_FILE` | _(unset)_ | Path to the persistent summary cache (e.g. `/tmp/trim-cache.json`). Unset = disabled |
 | `TRIM_DELTA_THRESHOLD` | `0.4` | Max fraction of changed lines before falling back to full re-summarization |
@@ -206,7 +206,7 @@ TRIM/
 │   ├── rtk.py                      # RTK (Rust Token Killer) optional pre-compressor
 │   ├── metrics.py                  # JSONL metrics writer
 │   ├── dashboard.py                # Dashboard renderer
-│   ├── server.py                   # FastAPI: /health /bulk-read /dashboard
+│   ├── server.py                   # FastAPI: /health /bulk-read /web-read /dashboard /api/metrics
 │   ├── __main__.py                 # CLI entry points
 │   ├── backends/
 │   │   └── litellm_backend.py      # LiteLLM provider wrapper

@@ -125,9 +125,9 @@ curl https://trim.your-company.com/health
 
 ## Authentication
 
-The server validates `X-TRIM-Key` on every `/bulk-read` request using a constant-time comparison. Requests without a valid key receive `401 Unauthorized`.
+The server validates `X-TRIM-Key` on `/bulk-read`, `/web-read`, and `/api/metrics` using a constant-time comparison. Requests without a valid key receive `401 Unauthorized`.
 
-The `/health`, `/dashboard`, and `/api/metrics` endpoints are unauthenticated by design — they expose no file content or API credentials.
+The `/health` and `/dashboard` endpoints are unauthenticated — they expose no file content or API credentials. The `/api/metrics` endpoint is auth-gated because it lists every file path that has been summarised.
 
 ---
 
