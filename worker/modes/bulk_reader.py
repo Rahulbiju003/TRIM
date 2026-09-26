@@ -7,6 +7,10 @@ Supports three paths:
 
 Caching and delta mode are enabled by setting TRIM_CACHE_FILE in the environment.
 When unset, behaviour is identical to the original — full summarization every read.
+
+RTK (Rust Token Killer) is used as an optional Tier 0 pre-compressor in the full
+summarization path. When available it reduces LLM input tokens at zero cost. The
+cache key is always based on the original (uncompressed) content hash.
 """
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ import time
 from dataclasses import dataclass
 
 from worker.backends.litellm_backend import CompletionResult, LiteLLMBackend
-from worker import cache, config, differ, metrics
+from worker import cache, config, differ, metrics, rtk as _rtk
 
 SYSTEM_PROMPT = """\
 You are a precise technical file analyst. You receive the full content of a \
@@ -127,11 +131,15 @@ class BulkReaderMode:
             )
 
         # ── full summarization (original behaviour) ───────────────────────────
-        user_message = self._build_user_message(file_path, content, question)
+        # RTK Tier 0: try to pre-compress. Cache key uses original content.
+        rtk_result = _rtk.compress(file_path, content)
+        content_for_llm = rtk_result.content if rtk_result is not None else content
+
+        user_message = self._build_user_message(file_path, content_for_llm, question)
         t0 = time.monotonic()
         result = self.backend.complete(SYSTEM_PROMPT, user_message)
         latency_ms = (time.monotonic() - t0) * 1000
-        cache.put(file_path, result.content, 0, content)
+        cache.put(file_path, result.content, 0, content)  # original content for delta
         metrics.log(
             file_path=file_path, line_count=line_count, latency_ms=latency_ms,
             input_tokens=result.input_tokens, output_tokens=result.output_tokens,
@@ -144,11 +152,19 @@ class BulkReaderMode:
         )
 
     def run_from_content(
-        self, file_path: str, content: str, question: str | None = None, mode: str = "http"
+        self,
+        file_path: str,
+        content: str,
+        question: str | None = None,
+        mode: str = "http",
+        model: str | None = None,
     ) -> BulkReadResult:
         """Like run() but caller provides file content (HTTP mode).
 
         Applies the same cache hit / delta / full summarization logic.
+
+        model: optional override — binary handlers can pass the vision/PDF model
+               so the right LLM is used for the completion call.
         """
         line_count = len(content.splitlines())
         question = question or DEFAULT_QUESTION
@@ -196,11 +212,20 @@ class BulkReaderMode:
             )
 
         # ── full summarization ────────────────────────────────────────────────
-        user_message = self._build_user_message(file_path, content, question)
+        # RTK Tier 0: try to pre-compress. Cache key uses original content.
+        rtk_result = _rtk.compress(file_path, content)
+        content_for_llm = rtk_result.content if rtk_result is not None else content
+
+        user_message = self._build_user_message(file_path, content_for_llm, question)
         t0 = time.monotonic()
-        result = self.backend.complete(SYSTEM_PROMPT, user_message)
+        # If a specific model was requested (e.g. from binary handler), use _do_complete;
+        # otherwise use the normal complete() which handles fallback internally.
+        if model and model != self.backend.model:
+            result = self.backend._do_complete(model, SYSTEM_PROMPT, user_message)
+        else:
+            result = self.backend.complete(SYSTEM_PROMPT, user_message)
         latency_ms = (time.monotonic() - t0) * 1000
-        cache.put(file_path, result.content, 0, content)
+        cache.put(file_path, result.content, 0, content)  # original content for delta
         metrics.log(
             file_path=file_path, line_count=line_count, latency_ms=latency_ms,
             input_tokens=result.input_tokens, output_tokens=result.output_tokens,

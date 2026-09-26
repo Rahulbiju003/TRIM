@@ -4,7 +4,40 @@ Run the TRIM worker on a shared Linux host. All team members point their hooks a
 
 ---
 
-## Prerequisites
+## Quick start — joining an existing deployment
+
+If someone on your team has already set up a TRIM server, you only need the following two steps on your developer machine:
+
+```bash
+# 1. Clone TRIM (hook installer only — no API keys needed on your machine)
+git clone https://github.com/Rahulbiju003/TRIM.git
+cd TRIM
+
+# 2. Install hooks into your project, pointed at the shared server
+WORKER_URL=https://trim.your-company.com \
+TRIM_API_KEY=<shared-secret-from-your-team> \
+  ./setup.sh --install /path/to/your/project
+```
+
+The `WORKER_URL` and `TRIM_API_KEY` are baked into the generated hook scripts at install time. Your machine needs no API keys and no TRIM venv — only `curl` and `python3`.
+
+To install into multiple projects:
+
+```bash
+WORKER_URL=https://trim.your-company.com TRIM_API_KEY=<secret> \
+  ./setup.sh --install /path/to/project-a
+
+WORKER_URL=https://trim.your-company.com TRIM_API_KEY=<secret> \
+  ./setup.sh --install /path/to/project-b
+```
+
+---
+
+## Server setup
+
+This section is for whoever is setting up the shared TRIM server.
+
+### Prerequisites
 
 - A Linux host accessible from developer machines (VM, VPS, or on-prem)
 - Podman or Docker on the server
@@ -15,10 +48,6 @@ Generate a key:
 ```bash
 openssl rand -hex 32
 ```
-
----
-
-## Server setup
 
 ### 1. Clone the repository on the server
 
@@ -42,18 +71,25 @@ podman run -d \
   --name trim-worker \
   --restart=always \
   -p 8080:8080 \
-  -e WORKER_MODEL=gemini/gemini-2.5-flash \
+  -e TRIM_ROUTE_TEXT=gemini/gemini-2.5-flash \
   -e GEMINI_API_KEY=<your-key> \
   -e TRIM_API_KEY=<your-generated-secret> \
   -e SHUNT_MIN_LINES=350 \
   -e SHUNT_TIMEOUT_SECONDS=45 \
-  -e SHUNT_MAX_BYTES=120000 \
   -e WORKER_PORT=8080 \
   -v /var/log/trim-metrics.jsonl:/tmp/trim-metrics.jsonl \
   trim-worker
 ```
 
-> **Note:** Set `SHUNT_MAX_BYTES=120000` on Linux (pipe buffer limit differs from macOS).
+> **Note:** `SHUNT_MAX_BYTES` is no longer required. TRIM computes the payload ceiling dynamically from the model's context window. Set it only if you need an explicit override.
+
+Optional multimodal routing (if your model supports it):
+
+```bash
+  -e TRIM_ROUTE_PDF=gemini/gemini-2.5-flash \
+  -e TRIM_ROUTE_VISION=gemini/gemini-2.5-flash \
+  -e TRIM_ROUTE_FALLBACK=gemini/gemini-2.5-pro \
+```
 
 ### 4. Place behind a reverse proxy (recommended)
 
@@ -83,30 +119,6 @@ server {
 ```bash
 curl https://trim.your-company.com/health
 # {"status":"ok","model":"gemini/gemini-2.5-flash"}
-```
-
----
-
-## Developer setup
-
-Each developer installs hooks pointing at the shared server. Run from the TRIM directory on the developer's machine:
-
-```bash
-WORKER_URL=https://trim.your-company.com \
-TRIM_API_KEY=<shared-secret> \
-  ./setup.sh --install /path/to/their/project
-```
-
-The `WORKER_URL` and `TRIM_API_KEY` are baked into the generated hook scripts at install time. The developer machine needs no API keys and no TRIM venv — only `curl` and `python3`.
-
-To install into multiple projects:
-
-```bash
-WORKER_URL=https://trim.your-company.com TRIM_API_KEY=<secret> \
-  ./setup.sh --install /path/to/project-a
-
-WORKER_URL=https://trim.your-company.com TRIM_API_KEY=<secret> \
-  ./setup.sh --install /path/to/project-b
 ```
 
 ---

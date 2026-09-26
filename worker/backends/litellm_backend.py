@@ -7,11 +7,13 @@ are selected by the WORKER_MODEL env-var string — no code changes needed.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import litellm
+import litellm.exceptions
 
 from worker import config
+from worker import routing as _routing
 
 
 @dataclass
@@ -39,22 +41,41 @@ class LiteLLMBackend:
         litellm.suppress_debug_info = True
         os.environ.setdefault("LITELLM_LOG", "ERROR")
 
+        # Temperature guard: check at init for the primary model
+        try:
+            info = litellm.get_model_info(self.model)
+            self._skip_temperature: bool = bool(info.get("supports_reasoning", False))
+        except Exception:
+            self._skip_temperature = True  # safe default: unknown models skip temperature
+
     def complete(self, system: str, user: str) -> CompletionResult:
         """Synchronous completion. Raises on error (caller handles fail-open)."""
+        try:
+            return self._do_complete(self.model, system, user)
+        except litellm.exceptions.ContextWindowExceededError:
+            fb = _routing.fallback_model()
+            if fb:
+                return self._do_complete(fb, system, user)
+            raise
+
+    def _do_complete(self, model: str, system: str, user: str) -> CompletionResult:
+        """Internal completion parameterized by model (supports fallback model)."""
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
         kwargs: dict = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "timeout": config.SHUNT_TIMEOUT_SECONDS,
         }
-        if self.temperature is not None:
+        # Temperature guard applied per-model (fallback may have different rules)
+        if self.temperature is not None and not _routing.skip_temperature(model):
             kwargs["temperature"] = self.temperature
         response = litellm.completion(**kwargs)
-        choice = response.choices[0]
-        content: str = choice.message.content or ""
+        choices = getattr(response, "choices", None) or []
+        choice = choices[0] if choices else None
+        content: str = (getattr(getattr(choice, "message", None), "content", None) or "") if choice else ""
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
@@ -62,5 +83,42 @@ class LiteLLMBackend:
             content=content.strip(),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            model=self.model,
+            model=model,
+        )
+
+    def complete_multimodal(
+        self,
+        system: str,
+        user_parts: list,
+        model: str | None = None,
+    ) -> CompletionResult:
+        """Completion with multimodal message parts (Tier 1 native multimodal).
+
+        user_parts: list of LiteLLM message part dicts (text + image_url).
+        model: override model (e.g. vision or PDF model); defaults to self.model.
+        """
+        use_model = model or self.model
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_parts},
+        ]
+        kwargs: dict = {
+            "model": use_model,
+            "messages": messages,
+            "timeout": config.SHUNT_TIMEOUT_SECONDS,
+        }
+        if self.temperature is not None and not _routing.skip_temperature(use_model):
+            kwargs["temperature"] = self.temperature
+        response = litellm.completion(**kwargs)
+        choices = getattr(response, "choices", None) or []
+        choice = choices[0] if choices else None
+        content: str = (getattr(getattr(choice, "message", None), "content", None) or "") if choice else ""
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        output_tokens = getattr(usage, "completion_tokens", 0) or 0
+        return CompletionResult(
+            content=content.strip(),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=use_model,
         )

@@ -39,16 +39,46 @@ def _optional_float(name: str) -> float | None:
         return None
 
 
+def _optional_int(name: str) -> int | None:
+    """Like _int but returns None when unset — used for dynamic-default fields."""
+    val = os.environ.get(name, "")
+    if not val:
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        print(f"[TRIM] ERROR: {name}={val!r} is not a valid integer. Ignoring.", file=sys.stderr)
+        return None
+
+
 # ── Provider / model ──────────────────────────────────────────────────────────
-# No default: validate() will catch a missing value at startup.
-WORKER_MODEL: str = os.environ.get("WORKER_MODEL", "")
+# TRIM_ROUTE_TEXT is the primary model for text summarization.
+# WORKER_MODEL is a legacy alias: if TRIM_ROUTE_TEXT is set it wins, otherwise
+# WORKER_MODEL is used.  Both env vars are accepted for backward compatibility.
+TRIM_ROUTE_TEXT: str = (
+    os.environ.get("TRIM_ROUTE_TEXT", "")
+    or os.environ.get("WORKER_MODEL", "")
+)
+# Legacy alias: always mirrors TRIM_ROUTE_TEXT so existing code referencing
+# WORKER_MODEL continues to work.
+WORKER_MODEL: str = TRIM_ROUTE_TEXT
+
 WORKER_TEMPERATURE: float | None = _optional_float("WORKER_TEMPERATURE")
+
+# Optional per-content-type model overrides.
+# When unset, routing.py falls back to TRIM_ROUTE_TEXT and checks capability.
+TRIM_ROUTE_PDF: str = os.environ.get("TRIM_ROUTE_PDF", "")
+TRIM_ROUTE_VISION: str = os.environ.get("TRIM_ROUTE_VISION", "")
+# Large-context fallback activated on ContextWindowExceededError.
+TRIM_ROUTE_FALLBACK: str = os.environ.get("TRIM_ROUTE_FALLBACK", "")
 
 # ── Routing thresholds ────────────────────────────────────────────────────────
 SHUNT_MIN_LINES: int = _int("SHUNT_MIN_LINES", 350)
 SHUNT_TIMEOUT_SECONDS: int = _int("SHUNT_TIMEOUT_SECONDS", 45)
-# macOS default 400 KB; Linux pipes have a smaller limit (~120 KB)
-SHUNT_MAX_BYTES: int = _int("SHUNT_MAX_BYTES", 400_000)
+# SHUNT_MAX_BYTES is now an *optional* override.  When None (default) the value
+# is computed dynamically from the model's context window by routing.py.
+# Set the env var explicitly to restore the old static behaviour.
+SHUNT_MAX_BYTES: int | None = _optional_int("SHUNT_MAX_BYTES")
 
 # ── Deployment mode ───────────────────────────────────────────────────────────
 # Unset → subprocess mode.  Set → HTTP mode (value is the base URL).
@@ -87,21 +117,17 @@ TRIM_MAX_DELTA_COUNT: int = _int("TRIM_MAX_DELTA_COUNT", 5)
 
 # ── Startup validation ────────────────────────────────────────────────────────
 
-_REQUIRED: list[str] = ["WORKER_MODEL"]
-
-
 def validate() -> None:
     """Check that all required env vars are set. Call once at process startup.
 
     Prints a clear error to stderr and exits with code 1 if anything is missing,
     rather than failing later with a cryptic LiteLLM error.
     """
-    missing = [name for name in _REQUIRED if not os.environ.get(name, "")]
-    if missing:
-        for name in missing:
-            print(
-                f"[TRIM] ERROR: {name} is required but not set. "
-                f"Add it to your .env file (see .env.example).",
-                file=sys.stderr,
-            )
+    # At least one of TRIM_ROUTE_TEXT or WORKER_MODEL must be set.
+    if not TRIM_ROUTE_TEXT:
+        print(
+            "[TRIM] ERROR: TRIM_ROUTE_TEXT (or legacy WORKER_MODEL) is required but not set. "
+            "Add it to your .env file (see .env.example).",
+            file=sys.stderr,
+        )
         sys.exit(1)

@@ -19,6 +19,7 @@ Rate limiting (optional):
 """
 from __future__ import annotations
 
+import base64
 import collections
 import secrets
 import threading
@@ -30,9 +31,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from worker import config, dashboard
+from worker import binary, config, dashboard, routing
 from worker.backends.litellm_backend import LiteLLMBackend
-from worker.modes.bulk_reader import BulkReaderMode
+from worker.modes.bulk_reader import BulkReaderMode, SYSTEM_PROMPT
 
 app = FastAPI(title="trim-worker", version="0.1.0")
 
@@ -40,8 +41,9 @@ app = FastAPI(title="trim-worker", version="0.1.0")
 _backend = LiteLLMBackend()
 _reader = BulkReaderMode(backend=_backend)
 
-# Max content size: slightly above SHUNT_MAX_BYTES to match hook-side guard
-_MAX_CONTENT_BYTES = config.SHUNT_MAX_BYTES + 4096
+# Max content size: slightly above compute_max_bytes to match hook-side guard.
+# Computed once at module load time from the primary text model.
+_MAX_CONTENT_BYTES = routing.compute_max_bytes(config.TRIM_ROUTE_TEXT) + 4096
 
 
 class _SlidingWindowRateLimiter:
@@ -84,7 +86,9 @@ def _check_auth(request: Request) -> None:
 
 class BulkReadRequest(BaseModel):
     file_path: str = Field(..., max_length=4096)
-    content: str = Field(..., max_length=_MAX_CONTENT_BYTES)
+    content: str | None = Field(default=None, max_length=_MAX_CONTENT_BYTES)
+    content_b64: str | None = Field(default=None)
+    is_binary: bool = Field(default=False)
     question: str | None = Field(default=None, max_length=2048)
 
 
@@ -96,11 +100,12 @@ class BulkReadResponse(BaseModel):
     output_tokens: int
     latency_ms: float
     model: str
+    pass_through: bool = False
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model": config.WORKER_MODEL}
+    return {"status": "ok", "model": config.TRIM_ROUTE_TEXT}
 
 
 @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
@@ -121,13 +126,18 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
     _check_auth(request)
     if not _rate_limiter.is_allowed():
         raise HTTPException(status_code=429, detail="Rate limit exceeded — try again shortly")
+
     try:
-        result = _reader.run_from_content(
-            file_path=req.file_path,
-            content=req.content,
-            question=req.question,
-            mode="http",
-        )
+        if req.is_binary and req.content_b64:
+            return _handle_binary(req)
+        else:
+            # Text path — require content field
+            if not req.content:
+                raise HTTPException(status_code=422, detail="content is required for non-binary requests")
+            return _handle_text(req)
+
+    except HTTPException:
+        raise
     except litellm.exceptions.RateLimitError as exc:
         # Provider rate-limited us — 429 is semantically correct and easier to
         # distinguish from real 500s in monitoring. Hook fails-open either way.
@@ -138,6 +148,16 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
         # Do not expose exc details — LiteLLM errors embed API keys in the message.
         raise HTTPException(status_code=500, detail="Worker error — see server logs") from exc
 
+
+def _handle_text(req: BulkReadRequest) -> BulkReadResponse:
+    """Process a plain-text file request."""
+    assert req.content is not None
+    result = _reader.run_from_content(
+        file_path=req.file_path,
+        content=req.content,
+        question=req.question,
+        mode="http",
+    )
     return BulkReadResponse(
         summary=result.summary,
         file_path=result.file_path,
@@ -146,6 +166,86 @@ def bulk_read(req: BulkReadRequest, request: Request) -> BulkReadResponse:
         output_tokens=result.output_tokens,
         latency_ms=result.latency_ms,
         model=result.model,
+        pass_through=False,
+    )
+
+
+def _handle_binary(req: BulkReadRequest) -> BulkReadResponse:
+    """Process a binary file request using the two-tier binary pipeline."""
+    assert req.content_b64 is not None
+    try:
+        raw_bytes = base64.b64decode(req.content_b64)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid base64 in content_b64") from exc
+
+    pdf_model = routing.model_for_pdf()
+    vision_model = routing.model_for_vision()
+
+    text_content, multimodal_parts = binary.process(
+        file_path=req.file_path,
+        raw_bytes=raw_bytes,
+        pdf_model=pdf_model,
+        vision_model=vision_model,
+    )
+
+    # (None, None) → unsupported binary type, signal pass-through to hook
+    if text_content is None and multimodal_parts is None:
+        return BulkReadResponse(
+            summary="",
+            file_path=req.file_path,
+            line_count=0,
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=0.0,
+            model=config.TRIM_ROUTE_TEXT,
+            pass_through=True,
+        )
+
+    t0 = time.monotonic()
+
+    if multimodal_parts is not None:
+        # Tier 1: native multimodal — pick the right model
+        from worker.binary.detector import BinaryType, detect_type
+        ftype = detect_type(req.file_path, raw_bytes[:512])
+        if ftype == BinaryType.PDF:
+            use_model = pdf_model or config.TRIM_ROUTE_TEXT
+        else:
+            use_model = vision_model or config.TRIM_ROUTE_TEXT
+        completion = _backend.complete_multimodal(
+            system=SYSTEM_PROMPT,
+            user_parts=multimodal_parts,
+            model=use_model,
+        )
+    else:
+        # Tier 2: text extraction — run through the normal text summarization path
+        assert text_content is not None
+        result = _reader.run_from_content(
+            file_path=req.file_path,
+            content=text_content,
+            question=req.question,
+            mode="http",
+        )
+        return BulkReadResponse(
+            summary=result.summary,
+            file_path=result.file_path,
+            line_count=result.line_count,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            latency_ms=result.latency_ms,
+            model=result.model,
+            pass_through=False,
+        )
+
+    latency_ms = (time.monotonic() - t0) * 1000
+    return BulkReadResponse(
+        summary=completion.content,
+        file_path=req.file_path,
+        line_count=0,
+        input_tokens=completion.input_tokens,
+        output_tokens=completion.output_tokens,
+        latency_ms=latency_ms,
+        model=completion.model,
+        pass_through=False,
     )
 
 

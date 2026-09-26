@@ -99,7 +99,6 @@ set -euo pipefail
 
 TRIM_WORKER="${WORKER_URL}"
 MIN_LINES="\${SHUNT_MIN_LINES:-350}"
-MAX_BYTES="\${SHUNT_MAX_BYTES:-400000}"
 TRIM_API_KEY="\${TRIM_API_KEY:-${TRIM_API_KEY-}}"
 
 HOOK_JSON="\$(cat)"
@@ -111,32 +110,45 @@ LIMIT="\$(echo "\$HOOK_JSON"    | python3 -c "import json,sys; d=json.load(sys.s
 [[ -z "\$FILE_PATH" || ! -f "\$FILE_PATH" ]] && exit 0
 [[ -n "\$OFFSET" || -n "\$LIMIT" ]] && exit 0
 
-case "\${FILE_PATH##*.}" in
-    pdf|png|jpg|jpeg|gif|bmp|ico|webp|\
-    zip|tar|gz|bz2|xz|7z|rar|\
-    whl|pyc|pyo|so|dylib|dll|exe|\
-    mp3|mp4|wav|mov|avi|mkv|\
-    db|sqlite|sqlite3) exit 0 ;;
-esac
-
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 # wc -l counts newlines; files without a trailing newline lose one count
-if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != \$'\n' ]]; then
+if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != $'\n' ]]; then
     LINE_COUNT=\$(( LINE_COUNT + 1 ))
 fi
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
-if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
-if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
+# Detect binary content by checking for null bytes in first 8 KB
+IS_BINARY="\$(python3 -c "
+import sys
+with open(sys.argv[1], 'rb') as f:
+    chunk = f.read(8192)
+print('1' if b'\\x00' in chunk else '0')
+" "\$FILE_PATH")" || exit 0
 
-# Python reads the file directly — safe path handling, no shell quoting issues
-PAYLOAD="\$(python3 -c "
+if [[ "\$IS_BINARY" == "1" ]]; then
+    # Binary file path
+    if (( BYTE_COUNT > 52428800 )); then exit 0; fi   # > 50 MB: pass through
+
+    PAYLOAD="\$(python3 -c "
+import json, sys, base64
+fp = sys.argv[1]
+with open(fp, 'rb') as f:
+    raw = f.read()
+print(json.dumps({'file_path': fp, 'content_b64': base64.b64encode(raw).decode(), 'is_binary': True}))
+" "\$FILE_PATH")" || exit 0
+else
+    # Text file path
+    if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
+    if (( BYTE_COUNT > 5242880 )); then exit 0; fi   # > 5 MB ceiling for text
+
+    PAYLOAD="\$(python3 -c "
 import json, sys
 fp = sys.argv[1]
 with open(fp, encoding='utf-8', errors='replace') as f:
     content = f.read()
 print(json.dumps({'file_path': fp, 'content': content}))
 " "\$FILE_PATH")" || exit 0
+fi
 
 AUTH_HEADER=""
 [[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
@@ -149,6 +161,10 @@ RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
     --data-binary @- \
     \${AUTH_HEADER:+\$AUTH_HEADER} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
+
+# Check for pass_through signal — binary type not handled, let Claude read normally
+PASS_THROUGH="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('pass_through', False))")" || exit 0
+[[ "\$PASS_THROUGH" == "True" ]] && exit 0
 
 SUMMARY="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
 [[ -z "\$SUMMARY" ]] && exit 0
@@ -176,7 +192,6 @@ set -euo pipefail
 
 TRIM_WORKER="${WORKER_URL}"
 MIN_LINES="\${SHUNT_MIN_LINES:-350}"
-MAX_BYTES="\${SHUNT_MAX_BYTES:-400000}"
 TRIM_API_KEY="\${TRIM_API_KEY:-${TRIM_API_KEY-}}"
 
 HOOK_JSON="\$(cat)"
@@ -197,31 +212,45 @@ PYEOF
 
 [[ -z "\$FILE_PATH" || ! -f "\$FILE_PATH" ]] && exit 0
 
-case "\${FILE_PATH##*.}" in
-    pdf|png|jpg|jpeg|gif|bmp|ico|webp|\
-    zip|tar|gz|bz2|xz|7z|rar|\
-    whl|pyc|pyo|so|dylib|dll|exe|\
-    mp3|mp4|wav|mov|avi|mkv|\
-    db|sqlite|sqlite3) exit 0 ;;
-esac
-
 LINE_COUNT="\$(wc -l < "\$FILE_PATH" | tr -d ' ')" || exit 0
 # wc -l counts newlines; files without a trailing newline lose one count
-if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != \$'\n' ]]; then
+if [[ "\$LINE_COUNT" -gt 0 ]] && [[ "\$(tail -c 1 "\$FILE_PATH" 2>/dev/null)" != $'\n' ]]; then
     LINE_COUNT=\$(( LINE_COUNT + 1 ))
 fi
 BYTE_COUNT="\$(wc -c < "\$FILE_PATH" | tr -d ' ')" || exit 0
 
-if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
-if (( BYTE_COUNT > MAX_BYTES )); then exit 0; fi
+# Detect binary content by checking for null bytes in first 8 KB
+IS_BINARY="\$(python3 -c "
+import sys
+with open(sys.argv[1], 'rb') as f:
+    chunk = f.read(8192)
+print('1' if b'\\x00' in chunk else '0')
+" "\$FILE_PATH")" || exit 0
 
-PAYLOAD="\$(python3 -c "
+if [[ "\$IS_BINARY" == "1" ]]; then
+    # Binary file path
+    if (( BYTE_COUNT > 52428800 )); then exit 0; fi   # > 50 MB: pass through
+
+    PAYLOAD="\$(python3 -c "
+import json, sys, base64
+fp = sys.argv[1]
+with open(fp, 'rb') as f:
+    raw = f.read()
+print(json.dumps({'file_path': fp, 'content_b64': base64.b64encode(raw).decode(), 'is_binary': True}))
+" "\$FILE_PATH")" || exit 0
+else
+    # Text file path
+    if (( LINE_COUNT < MIN_LINES )); then exit 0; fi
+    if (( BYTE_COUNT > 5242880 )); then exit 0; fi   # > 5 MB ceiling for text
+
+    PAYLOAD="\$(python3 -c "
 import json, sys
 fp = sys.argv[1]
 with open(fp, encoding='utf-8', errors='replace') as f:
     content = f.read()
 print(json.dumps({'file_path': fp, 'content': content}))
 " "\$FILE_PATH")" || exit 0
+fi
 
 AUTH_HEADER=""
 [[ -n "\$TRIM_API_KEY" ]] && AUTH_HEADER="-H X-TRIM-Key:\${TRIM_API_KEY}"
@@ -234,6 +263,10 @@ RESPONSE="\$(printf '%s\n' "\$PAYLOAD" | curl -sf \
     --data-binary @- \
     \${AUTH_HEADER:+\$AUTH_HEADER} \
     --max-time "\${SHUNT_TIMEOUT_SECONDS:-45}" 2>/dev/null)" || exit 0
+
+# Check for pass_through signal — binary type not handled, let Claude read normally
+PASS_THROUGH="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('pass_through', False))")" || exit 0
+[[ "\$PASS_THROUGH" == "True" ]] && exit 0
 
 SUMMARY="\$(printf '%s\n' "\$RESPONSE" | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('summary',''))")" || exit 0
 [[ -z "\$SUMMARY" ]] && exit 0
