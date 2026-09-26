@@ -98,8 +98,8 @@ class TestPayloadLimits:
 
     def test_oversized_content_rejected(self, client, monkeypatch):
         """Content exceeding _MAX_CONTENT_BYTES must be rejected."""
-        import worker.config as config
-        limit = config.SHUNT_MAX_BYTES + 4096 + 1
+        import worker.server as server_module
+        limit = server_module._MAX_CONTENT_BYTES + 1
         huge_content = "x" * limit
         resp = client.post("/bulk-read", json={"file_path": "/x.py", "content": huge_content})
         assert resp.status_code == 422

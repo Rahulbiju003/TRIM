@@ -172,23 +172,31 @@ class TestValidate:
     """config.validate() — startup guard for required env vars."""
 
     def test_passes_when_worker_model_set(self, monkeypatch):
+        monkeypatch.delenv("TRIM_ROUTE_TEXT", raising=False)
         monkeypatch.setenv("WORKER_MODEL", "gpt-4.1-nano")
-        # Must not raise / exit
-        config.validate()
+        config.validate()  # must not raise / exit
+
+    def test_passes_when_trim_route_text_set(self, monkeypatch):
+        monkeypatch.setenv("TRIM_ROUTE_TEXT", "gemini/gemini-2.5-flash")
+        monkeypatch.delenv("WORKER_MODEL", raising=False)
+        config.validate()  # must not raise / exit
 
     def test_exits_when_worker_model_missing(self, monkeypatch):
+        monkeypatch.delenv("TRIM_ROUTE_TEXT", raising=False)
         monkeypatch.delenv("WORKER_MODEL", raising=False)
         with pytest.raises(SystemExit) as exc_info:
             config.validate()
         assert exc_info.value.code == 1
 
     def test_exits_when_worker_model_empty_string(self, monkeypatch):
+        monkeypatch.delenv("TRIM_ROUTE_TEXT", raising=False)
         monkeypatch.setenv("WORKER_MODEL", "")
         with pytest.raises(SystemExit) as exc_info:
             config.validate()
         assert exc_info.value.code == 1
 
     def test_error_message_names_the_var(self, monkeypatch, capsys):
+        monkeypatch.delenv("TRIM_ROUTE_TEXT", raising=False)
         monkeypatch.delenv("WORKER_MODEL", raising=False)
         with pytest.raises(SystemExit):
             config.validate()
@@ -196,6 +204,7 @@ class TestValidate:
         assert "WORKER_MODEL" in captured.err
 
     def test_error_message_mentions_env_file(self, monkeypatch, capsys):
+        monkeypatch.delenv("TRIM_ROUTE_TEXT", raising=False)
         monkeypatch.delenv("WORKER_MODEL", raising=False)
         with pytest.raises(SystemExit):
             config.validate()

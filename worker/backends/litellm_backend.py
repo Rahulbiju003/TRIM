@@ -48,8 +48,18 @@ class LiteLLMBackend:
         except Exception:
             self._skip_temperature = True  # safe default: unknown models skip temperature
 
-    def complete(self, system: str, user: str) -> CompletionResult:
-        """Synchronous completion. Raises on error (caller handles fail-open)."""
+    def complete(
+        self, system: str, user: str, *, model: str | None = None
+    ) -> CompletionResult:
+        """Synchronous completion. Raises on error (caller handles fail-open).
+
+        model: optional per-call override. When provided, that model is used
+               directly with no context-window fallback (the caller has already
+               chosen the right model for the content type).
+        """
+        if model and model != self.model:
+            # Explicit override — bypass fallback logic
+            return self._do_complete(model, system, user)
         try:
             return self._do_complete(self.model, system, user)
         except litellm.exceptions.ContextWindowExceededError:

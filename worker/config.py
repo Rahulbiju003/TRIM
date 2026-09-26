@@ -130,9 +130,13 @@ def validate() -> None:
 
     Prints a clear error to stderr and exits with code 1 if anything is missing,
     rather than failing later with a cryptic LiteLLM error.
+
+    Re-reads env at call time (not the module-level snapshot) so tests that
+    use monkeypatch.setenv() after import still work correctly.
     """
     # At least one of TRIM_ROUTE_TEXT or WORKER_MODEL must be set.
-    if not TRIM_ROUTE_TEXT:
+    model = os.environ.get("TRIM_ROUTE_TEXT", "") or os.environ.get("WORKER_MODEL", "")
+    if not model:
         print(
             "[TRIM] ERROR: TRIM_ROUTE_TEXT (or legacy WORKER_MODEL) is required but not set. "
             "Add it to your .env file (see .env.example).",

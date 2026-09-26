@@ -57,6 +57,12 @@ DEFAULT_QUESTION = (
     "dependencies. Be concise."
 )
 
+# Maximum diff size (bytes) to send on the delta path.
+# A 5% change in a 400 KB file is still ~20 KB of diff — large enough to
+# exceed some model context windows. Fall back to full re-summarization above
+# this threshold.
+_MAX_DIFF_BYTES = 50_000
+
 
 @dataclass
 class BulkReadResult:
@@ -78,78 +84,14 @@ class BulkReaderMode:
         self.backend = backend or LiteLLMBackend()
 
     def run(self, file_path: str, question: str | None = None) -> BulkReadResult:
-        """Read *file_path* and return a summary.
+        """Read *file_path* from disk and return a summary.
 
         Cache hit  → returns immediately, no LLM call.
         Delta path → sends previous summary + diff to LLM (cheap update).
         Full path  → sends full file content to LLM (original behaviour).
         """
         content = self._read_file(file_path)
-        line_count = len(content.splitlines())
-        question = question or DEFAULT_QUESTION
-
-        # ── cache check ───────────────────────────────────────────────────────
-        entry = cache.get(file_path)
-        if entry is not None:
-            metrics.log(
-                file_path=file_path, line_count=line_count, latency_ms=0.0,
-                input_tokens=0, output_tokens=0, mode="subprocess",
-                model=self.backend.model, cache_hit=True, delta=False,
-            )
-            return BulkReadResult(
-                summary=entry.summary, file_path=file_path, line_count=line_count,
-                input_tokens=0, output_tokens=0, latency_ms=0.0,
-                model=self.backend.model, cache_hit=True, delta=False,
-            )
-
-        # ── delta check ───────────────────────────────────────────────────────
-        stale = cache.get_stale(file_path)
-        diff_result = differ.compute(file_path, content, stale.content) if stale else None
-        use_delta = (
-            stale is not None
-            and diff_result is not None
-            and stale.delta_count < config.TRIM_MAX_DELTA_COUNT
-            and diff_result.changed_ratio <= config.TRIM_DELTA_THRESHOLD
-        )
-
-        if use_delta:
-            assert stale is not None and diff_result is not None
-            user_message = self._build_delta_message(stale.summary, diff_result.unified)
-            t0 = time.monotonic()
-            result: CompletionResult = self.backend.complete(DELTA_SYSTEM_PROMPT, user_message)
-            latency_ms = (time.monotonic() - t0) * 1000
-            cache.put(file_path, result.content, stale.delta_count + 1, content)
-            metrics.log(
-                file_path=file_path, line_count=line_count, latency_ms=latency_ms,
-                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-                mode="subprocess", model=result.model, cache_hit=False, delta=True,
-            )
-            return BulkReadResult(
-                summary=result.content, file_path=file_path, line_count=line_count,
-                input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-                latency_ms=latency_ms, model=result.model, cache_hit=False, delta=True,
-            )
-
-        # ── full summarization (original behaviour) ───────────────────────────
-        # RTK Tier 0: try to pre-compress. Cache key uses original content.
-        rtk_result = _rtk.compress(file_path, content)
-        content_for_llm = rtk_result.content if rtk_result is not None else content
-
-        user_message = self._build_user_message(file_path, content_for_llm, question)
-        t0 = time.monotonic()
-        result = self.backend.complete(SYSTEM_PROMPT, user_message)
-        latency_ms = (time.monotonic() - t0) * 1000
-        cache.put(file_path, result.content, 0, content)  # original content for delta
-        metrics.log(
-            file_path=file_path, line_count=line_count, latency_ms=latency_ms,
-            input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-            mode="subprocess", model=result.model, cache_hit=False, delta=False,
-        )
-        return BulkReadResult(
-            summary=result.content, file_path=file_path, line_count=line_count,
-            input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-            latency_ms=latency_ms, model=result.model, cache_hit=False, delta=False,
-        )
+        return self._run_core(file_path, content, question, "subprocess", None)
 
     def run_from_content(
         self,
@@ -161,11 +103,21 @@ class BulkReaderMode:
     ) -> BulkReadResult:
         """Like run() but caller provides file content (HTTP mode).
 
-        Applies the same cache hit / delta / full summarization logic.
-
-        model: optional override — binary handlers can pass the vision/PDF model
+        model: optional override — binary handlers pass the vision/PDF model
                so the right LLM is used for the completion call.
         """
+        return self._run_core(file_path, content, question, mode, model)
+
+    # ── core logic (single implementation shared by both public methods) ───────
+
+    def _run_core(
+        self,
+        file_path: str,
+        content: str,
+        question: str | None,
+        mode: str,
+        model: str | None,
+    ) -> BulkReadResult:
         line_count = len(content.splitlines())
         question = question or DEFAULT_QUESTION
 
@@ -191,15 +143,16 @@ class BulkReaderMode:
             and diff_result is not None
             and stale.delta_count < config.TRIM_MAX_DELTA_COUNT
             and diff_result.changed_ratio <= config.TRIM_DELTA_THRESHOLD
+            and len(diff_result.unified) <= _MAX_DIFF_BYTES
         )
 
         if use_delta:
-            assert stale is not None and diff_result is not None
-            user_message = self._build_delta_message(stale.summary, diff_result.unified)
+            # stale and diff_result are guaranteed non-None by use_delta predicate
+            user_message = self._build_delta_message(stale.summary, diff_result.unified)  # type: ignore[union-attr]
             t0 = time.monotonic()
             result: CompletionResult = self.backend.complete(DELTA_SYSTEM_PROMPT, user_message)
             latency_ms = (time.monotonic() - t0) * 1000
-            cache.put(file_path, result.content, stale.delta_count + 1, content)
+            cache.put(file_path, result.content, stale.delta_count + 1, content)  # type: ignore[union-attr]
             metrics.log(
                 file_path=file_path, line_count=line_count, latency_ms=latency_ms,
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens,
@@ -218,12 +171,9 @@ class BulkReaderMode:
 
         user_message = self._build_user_message(file_path, content_for_llm, question)
         t0 = time.monotonic()
-        # If a specific model was requested (e.g. from binary handler), use _do_complete;
-        # otherwise use the normal complete() which handles fallback internally.
-        if model and model != self.backend.model:
-            result = self.backend._do_complete(model, SYSTEM_PROMPT, user_message)
-        else:
-            result = self.backend.complete(SYSTEM_PROMPT, user_message)
+        # Pass model= through complete(); if None, complete() uses self.backend.model
+        # with context-window fallback. If set, bypasses fallback (explicit choice).
+        result = self.backend.complete(SYSTEM_PROMPT, user_message, model=model)
         latency_ms = (time.monotonic() - t0) * 1000
         cache.put(file_path, result.content, 0, content)  # original content for delta
         metrics.log(

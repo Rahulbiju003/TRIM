@@ -119,8 +119,12 @@ class TestComplete:
         backend.complete("sys", "usr")
         assert mock_litellm.call_args[1]["timeout"] == 99
 
+    @patch("worker.backends.litellm_backend.litellm.get_model_info")
     @patch("worker.backends.litellm_backend.litellm.completion")
-    def test_temperature_passed_when_set(self, mock_litellm):
+    def test_temperature_passed_when_set(self, mock_litellm, mock_info):
+        # Model "m" is unknown to litellm — mock get_model_info to report it
+        # as a non-reasoning model so the temperature guard does not fire.
+        mock_info.return_value = {"supports_reasoning": False}
         mock_litellm.return_value = _make_litellm_response()
         backend = LiteLLMBackend(model="m", temperature=0.3)
         backend.complete("sys", "usr")
